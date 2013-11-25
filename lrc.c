@@ -21,6 +21,7 @@
 #include <pcap.h>
 
 #include "logger.h"
+#include "matchers.h"
 
 #define LLC_TYPE_IP 0x0008
 #define HOP_DEFAULT_TIMEOUT 5
@@ -36,6 +37,9 @@ struct ctx {
     u_int channels[14];
     u_int channel_fix;
 
+    char *matchers_filename;
+    char *log_filename;
+    struct matcher_entry *matchers_list;
     u_int hop_time;
 
     //LORCON structs
@@ -54,6 +58,7 @@ void usage(char *argv[]) {
     printf("\t-c <channels> : sets the channels for hopping(or not, if fix defined)\n");
     printf("\t-f : fix channel, this will disable hopping and starts to always use first channel in list\n");
     printf("\t-t <time> : hop sleep time in sec(default = 5 sec)\n");
+    printf("\t-l <file> : file describing configuration for matchers\n");
     printf("\n");
     printf("Example(for single interface): %s -i wlan0 -c 1,6,11\n", argv[0]);
     printf("Example(for dual interfaces): %s -m wlan0 -j wlan1 -c 1,6,11\n", argv[0]);
@@ -69,8 +74,9 @@ void sig_handler(int sig) {
     switch(sig) {
         case SIGINT:
             dead = 1;
+            printf("Got Ctrl+C, ending threads...\n");
             signal(SIGALRM, sig_handler);
-            alarm(10);
+            alarm(5);
             break;
         case SIGALRM:
             exit(0);
@@ -141,7 +147,24 @@ int get_ssid(const u_char *packet_data, char *ssid_name, u_short max_name_len) {
     return -1;
 }
 
-void process_ip_packet(const u_char *dot3, u_int dot3_len) {
+matcher_entry *matchers_match(const char *data, int datalen, struct ctx *ctx) {
+    matcher_entry *matcher;
+    int ovector[30]; 
+
+    for(matcher = ctx->matchers_list; matcher != NULL; matcher = matcher->next) {
+        if(pcre_exec(matcher->match, NULL, data, datalen,  0, 0, ovector, 30) > 0) {
+            logger_info("Matched pattern for conf '%s'\n", matcher->name);
+            if(pcre_exec(matcher->ignore, NULL, data, datalen, 0, 0, ovector, 30) > 0) {
+                logger_info("Matched ignore for conf '%s'\n", matcher->name);
+            } else {
+                return matcher;
+            }
+        }
+    }
+    return NULL;
+}
+
+void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx) {
 
     struct iphdr *ip_hdr;
     struct tcphdr *tcp_hdr;
@@ -153,6 +176,8 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len) {
 
     u_char *udp_data;
     int udp_datalen;
+
+    matcher_entry *matcher;
 
     /* Calculate the size of the IP Header. ip_hdr->ihl contains the number of 32 bit
     words that represent the header size. Therfore to get the number of bytes
@@ -194,7 +219,35 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len) {
 
             tcp_data = (u_char*) tcp_hdr + tcp_hdr->doff * 4;
 
-            hexdump((u_char *) tcp_data, tcp_datalen);
+            if((matcher = matchers_match((const char *)tcp_data, tcp_datalen, ctx))) {
+
+/*
+  char *response_data;
+  uint32_t response_data_len;
+  
+  if(matcher->response) {
+    response_data = matcher->response;
+    response_data_len = matcher->response_len;
+  } else if(matcher->pyfunc) {
+    PyObject *args = PyTuple_New(1);
+    PyTuple_SetItem(args,0,PyString_FromStringAndSize(tcp_data, tcp_datalen)); // here is data
+
+    PyObject *value = PyObject_CallObject(matcher->pyfunc, args);
+    if(value == NULL){
+      printf("Python function returns no data!");
+      return;
+    }   
+  
+    response_data = PyString_AsString(value);
+    response_data_len = strlen(response_data);
+  } else {
+    printf("No data to inject!\n");
+    return;
+  }
+*/
+                hexdump((u_char *) tcp_data, tcp_datalen);
+            }
+
             break;
         case IPPROTO_UDP:
             udp_hdr = (struct udphdr *) (dot3+sizeof(struct iphdr));
@@ -273,7 +326,7 @@ lorcon_packet_t *build_wlan_packet(lorcon_packet_t *packet) {
 /*
 * Called by lorcon_loop for every packet 
 */
-void process_wlan_packet(lorcon_packet_t *packet) {
+void process_wlan_packet(lorcon_packet_t *packet, struct ctx *ctx) {
 
     struct lorcon_dot11_extra *i_hdr;
 
@@ -320,7 +373,7 @@ void process_wlan_packet(lorcon_packet_t *packet) {
                     switch(i_hdr->llc_type) {
 
                         case LLC_TYPE_IP:
-                            process_ip_packet(packet->packet_data, packet->length_data);
+                            process_ip_packet(packet->packet_data, packet->length_data, ctx);
                             break;
                         default:
                             logger_info("\tLLC said that packet has no IP layer, skipping it");
@@ -486,7 +539,7 @@ void process_packet(lorcon_t *context, lorcon_packet_t *packet, u_char *user) {
     if(dead) {
         lorcon_breakloop(context);
     } else {
-        process_wlan_packet(packet);
+        process_wlan_packet(packet, ctx);
     }
     //lorcon_packet_t *n_pack;
     //n_pack = build_wlan_packet(l2data, l2data_len);
@@ -596,13 +649,15 @@ int main(int argc, char *argv[]) {
 
     ctx->channel_fix=0;
     ctx->hop_time = HOP_DEFAULT_TIMEOUT;
+    ctx->matchers_filename = MATCHERS_DEFAULT_FILENAME;
+    ctx->log_filename = NULL;
 
 	printf ("%s - Simple 802.11 hijacker\n", argv[0]);
 	printf ("-----------------------------------------------------\n\n");
 
 	// This handles all of the command line arguments
 	
-	while ((c = getopt(argc, argv, "i:c:j:m:ft:h")) != EOF) {
+	while ((c = getopt(argc, argv, "i:c:j:m:ft:l:k:h")) != EOF) {
 		switch (c) {
 			case 'i': 
 				ctx->interface_inj = strdup(optarg);
@@ -632,6 +687,12 @@ int main(int argc, char *argv[]) {
             case 't':
                 ctx->hop_time = atoi(optarg);
                 break;
+            case 'l':
+                ctx->log_filename = strdup(optarg);
+                break;
+            case 'k':
+                ctx->matchers_filename = strdup(optarg);
+                break;
 			case 'h':
 				usage(argv);
 				break;
@@ -653,9 +714,21 @@ int main(int argc, char *argv[]) {
 		return -1;
 	}
 
-    if (!logger_init(NULL)) {
-        //(void) fprintf(stderr, "Fail to open log file: %s (%s)\n", config.log_file, strerror(errno));
+    if(ctx->hop_time <= 0) {
+        (void) fprintf(stderr, "Hop timeout must be > 0 (remember, it is defined in round seconds)\n");
         return -1;
+    };
+
+    if(!(ctx->matchers_list = parse_matchers_file(ctx->matchers_filename))) {
+        (void) fprintf(stderr, "Error during parsing matchers file: %s\n", ctx->matchers_filename);
+        return -1;
+    }
+
+    if (!logger_init(ctx->log_filename)) {
+        (void) fprintf(stderr, "Fail to open log file: %s (%s)\n", ctx->log_filename, strerror(errno));
+        return -1;
+    } else if(ctx->log_filename) {
+        (void) fprintf(stderr, "Logging to file: %s\n", ctx->log_filename);
     }
 
     // The following is all of the standard interface, driver, and context setup
