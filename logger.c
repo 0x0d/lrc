@@ -13,9 +13,7 @@ static FILE *logfd;
 
 extern int debugged;
 
-int
-logger_init(const char *filename)
-{
+int logger_init(const char *filename) {
 	FILE *fd;
 
 	if(filename) {

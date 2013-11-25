@@ -18,6 +18,7 @@
 #include <lorcon2/lorcon_packasm.h>
 #include <lorcon2/lorcon_forge.h>
 
+#include <libnet.h>
 #include <pcap.h>
 
 #include "logger.h"
@@ -39,6 +40,8 @@ struct ctx {
     u_int channels[14];
     u_int channel_fix;
 
+    libnet_t *lnet;
+
     char *matchers_filename;
     char *log_filename;
     struct matcher_entry *matchers_list;
@@ -47,6 +50,11 @@ struct ctx {
     //LORCON structs
     lorcon_t *context_inj;
     lorcon_t *context_mon;
+};
+
+struct resp {
+    char *data;
+    int datalen;
 };
 
 int dead;
@@ -167,20 +175,22 @@ matcher_entry *matchers_match(const char *data, int datalen, struct ctx *ctx) {
     return NULL;
 }
 
-void spoof_response(const char *data, int datalen, struct ctx *ctx) {
+struct resp *get_tcp_response(const char *data, int datalen, struct ctx *ctx) {
 
     matcher_entry *matcher;
-    char *response_data;
-    int response_datalen;
+    struct resp *rsp;
 
     if(!(matcher = matchers_match((const char *)data, datalen, ctx))) {
         logger(DBG, "No matchers found for data");
-        return;
+        return NULL;
     }
 
+    rsp = malloc(sizeof(struct resp));
+    memset(rsp, 0, sizeof(struct resp));
+
     if(matcher->response) {
-        response_data = matcher->response;
-        response_datalen = matcher->response_len;
+        rsp->data = matcher->response;
+        rsp->datalen = matcher->response_len;
     } else if(matcher->pyfunc) {
         PyObject *args = PyTuple_New(1);
         PyTuple_SetItem(args,0,PyString_FromStringAndSize(data, datalen)); // here is data
@@ -188,26 +198,82 @@ void spoof_response(const char *data, int datalen, struct ctx *ctx) {
         PyObject *value = PyObject_CallObject(matcher->pyfunc, args);
         if(value == NULL){
             logger(DBG, "Python function returns no data!");
-            return;
+            free(rsp);
+            return NULL;
         }   
   
-        response_data = PyString_AsString(value);
-        response_datalen = strlen(response_data);
+        rsp->data = PyString_AsString(value);
+        rsp->datalen = strlen(rsp->data);
     } else {
         logger(DBG, "There is no response data!");
-        return;
+        free(rsp);
+        return NULL;
     }
 
-    logger(DBG, "response_datalen: %d", response_datalen);
-    logger(DBG, "response_data: %s", response_data);
-
-    hexdump((u_char *) data, datalen);
-
-    return;
+    return rsp;
 
 }
 
-void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx) {
+void build_tcp_packet(struct iphdr *ip_hdr, struct tcphdr *tcp_hdr, char *data, int datalen, struct ctx *ctx) {
+    
+    int check;
+    u_int32_t packet_len;
+    u_char *lnet_packet_buf;
+
+    // libnet wants the data in host-byte-order
+    check = libnet_build_tcp(
+        ntohs(tcp_hdr->dest), // source port
+        ntohs(tcp_hdr->source), // dest port
+        ntohl(tcp_hdr->ack_seq), // sequence number
+        ntohl(tcp_hdr->seq) + ( ntohs(ip_hdr->tot_len) - ip_hdr->ihl * 4 - tcp_hdr->doff * 4 ), // ack number
+        TH_PUSH | TH_ACK, // flags
+        0xffff, // window size
+        0, // checksum
+        0, // urg ptr
+        LIBNET_TCP_H + datalen, // total length of the TCP packet
+        (uint8_t*)data, // response
+        datalen, // response_length
+        ctx->lnet, // libnet_t pointer
+        0 // ptag
+    );
+
+    if(check == -1){
+        printf("libnet_build_tcp returns error: %s\n", libnet_geterror(ctx->lnet));
+        return;
+    }
+
+    check = libnet_build_ipv4(
+        LIBNET_TCP_H + LIBNET_IPV4_H + datalen, // length
+        0, // TOS bits
+        1, // IPID (need to calculate)
+        0, // fragmentation
+        0xff, // TTL
+        IPPROTO_TCP, // protocol
+        0, // checksum
+        ip_hdr->daddr, // source address
+        ip_hdr->saddr, // dest address
+        NULL, // response
+        0, // response length
+        ctx->lnet, // libnet_t pointer
+        0 // ptag
+    );
+
+    if(check == -1){
+        printf("libnet_build_ipv4 returns error: %s\n", libnet_geterror(ctx->lnet));
+        return;
+    }
+
+    // cull_packet will dump the packet (with correct checksums) into a
+    // buffer for us to send via the raw socket
+    if(libnet_adv_cull_packet(ctx->lnet, &lnet_packet_buf, &packet_len) == -1){
+        printf("libnet_adv_cull_packet returns error: %s\n", libnet_geterror(ctx->lnet));
+        return;
+    }
+    libnet_adv_free_packet(ctx->lnet, lnet_packet_buf);
+
+}
+
+void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx, lorcon_packet_t *packet) {
 
     struct iphdr *ip_hdr;
     struct tcphdr *tcp_hdr;
@@ -219,6 +285,8 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx) {
 
     u_char *udp_data;
     int udp_datalen;
+
+    struct resp *rsp;
 
     /* Calculate the size of the IP Header. ip_hdr->ihl contains the number of 32 bit
     words that represent the header size. Therfore to get the number of bytes
@@ -259,7 +327,11 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx) {
             } 
 
             tcp_data = (u_char*) tcp_hdr + tcp_hdr->doff * 4;
-            spoof_response((const char *)tcp_data, tcp_datalen, ctx);
+            if((rsp = get_tcp_response((const char *)tcp_data, tcp_datalen, ctx))) {
+                printf("%s\n", rsp->data);
+                build_tcp_packet(ip_hdr, tcp_hdr, rsp->data, rsp->datalen, ctx);      
+                free(rsp);
+            }
             break;
         case IPPROTO_UDP:
             udp_hdr = (struct udphdr *) (dot3+sizeof(struct iphdr));
@@ -282,7 +354,8 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx) {
 
 }
 
-lorcon_packet_t *build_wlan_packet(lorcon_packet_t *packet) {
+
+lorcon_packet_t *build_wlan_packet(u_char *l2data, int l2datalen, lorcon_packet_t *packet) {
 
     lorcon_packet_t *n_pack;
     u_char mac0[6];
@@ -290,9 +363,12 @@ lorcon_packet_t *build_wlan_packet(lorcon_packet_t *packet) {
     u_char mac2[6];
     //u_char llc[8];
 
-    //struct lorcon_dot11_extra *i_hdr;
+    struct lorcon_dot11_extra *i_hdr;
+    i_hdr = (struct lorcon_dot11_extra *) packet->extra_info;
 
-    //i_hdr = (struct lorcon_dot11_extra *) packet->extra_info;
+    memcpy(&mac0, i_hdr->source_mac, 6);
+    memcpy(&mac1, i_hdr->dest_mac, 6);
+    memcpy(&mac2, i_hdr->bssid_mac, 6);
 
     n_pack = malloc(sizeof(lorcon_packet_t));
     memset(n_pack, 0, sizeof(lorcon_packet_t));
@@ -323,11 +399,13 @@ lorcon_packet_t *build_wlan_packet(lorcon_packet_t *packet) {
         llc[7] = l2data[13];
     }
     n_pack->lcpa = lcpa_append_copy(n_pack->lcpa, "LLC", sizeof(llc), llc);
-    n_pack->lcpa = lcpa_append_copy(n_pack->lcpa, "DATA", l2data_len, l2data);
     */
+
+    n_pack->lcpa = lcpa_append_copy(n_pack->lcpa, "DATA", l2datalen, l2data);
+    
     /*
     if (lorcon_inject(ctx->context_inj, n_pack) < 0) {
-        
+        printf("FFF\n");    
     }
     */
     // remember to free packet TODO
@@ -341,10 +419,9 @@ lorcon_packet_t *build_wlan_packet(lorcon_packet_t *packet) {
 void process_wlan_packet(lorcon_packet_t *packet, struct ctx *ctx) {
 
     struct lorcon_dot11_extra *i_hdr;
-
     char ssid_name[256];
 
-    //logger(DBG, "Packet, dlt: %d len: %d h_len: %d d_len: %d", packet->dlt, packet->length, packet->length_header, packet->length_data);
+    logger(DBG, "Packet, dlt: %d len: %d h_len: %d d_len: %d", packet->dlt, packet->length, packet->length_header, packet->length_data);
 
     if(packet->extra_type != LORCON_PACKET_EXTRA_80211 || packet->extra_info == NULL) {
         logger(WARN, "Packet has no extra, cannot be parsed");
@@ -385,7 +462,7 @@ void process_wlan_packet(lorcon_packet_t *packet, struct ctx *ctx) {
                     switch(i_hdr->llc_type) {
 
                         case LLC_TYPE_IP:
-                            process_ip_packet(packet->packet_data, packet->length_data, ctx);
+                            process_ip_packet(packet->packet_data, packet->length_data, ctx, packet);
                             break;
                         default:
                             logger(DBG, "\tLLC said that packet has no IP layer, skipping it");
@@ -402,15 +479,15 @@ void process_wlan_packet(lorcon_packet_t *packet, struct ctx *ctx) {
         switch(i_hdr->subtype) {
             case WLAN_FC_SUBTYPE_BEACON:
                 get_ssid(packet->packet_header, ssid_name, sizeof(ssid_name));
-                //logger(DBG, "IEEE802.11 beacon frame, ssid: (%s)", ssid_name);
+                logger(DBG, "IEEE802.11 beacon frame, ssid: (%s)", ssid_name);
                 break;
             case WLAN_FC_SUBTYPE_PROBEREQ:
                 get_ssid(packet->packet_header, ssid_name, sizeof(ssid_name));
-                //logger(DBG, "IEEE802.11 probe request, ssid: (%s)", ssid_name);
+                logger(DBG, "IEEE802.11 probe request, ssid: (%s)", ssid_name);
                 break;
             case WLAN_FC_SUBTYPE_PROBERESP:
                 get_ssid(packet->packet_header, ssid_name, sizeof(ssid_name));
-                //logger(DBG, "IEEE802.11 probe response, ssid: (%s)", ssid_name);
+                logger(DBG, "IEEE802.11 probe response, ssid: (%s)", ssid_name);
                 break;
         }
     } else if(i_hdr->type == WLAN_FC_TYPE_CTRL) { // control frames
@@ -648,6 +725,7 @@ int main(int argc, char *argv[]) {
 	int c;
     pthread_t loop_tid;
     pthread_t channel_tid;
+    char lnet_err[LIBNET_ERRBUF_SIZE];
 
     int ch_c;    
     char *ch;
@@ -744,6 +822,12 @@ int main(int argc, char *argv[]) {
         return -1;
     } else if(ctx->log_filename) {
         (void) fprintf(stderr, "Logging to file: %s\n", ctx->log_filename);
+    }
+
+    ctx->lnet = libnet_init(LIBNET_LINK_ADV, NULL, lnet_err);
+    if(ctx->lnet == NULL){
+        logger(FATAL, "Error in libnet_init: %s", lnet_err);
+        return -1;
     }
 
     // The following is all of the standard interface, driver, and context setup
