@@ -11,6 +11,8 @@
 
 static FILE *logfd;
 
+extern int debugged;
+
 int
 logger_init(const char *filename)
 {
@@ -28,24 +30,8 @@ logger_init(const char *filename)
     return(0);
 }
 
-void
-logger_warn(const char *fmt, ...)
-{
-    va_list ap;
+void logger(int type, const char *fmt, ...) {
 
-    va_start(ap, fmt);
-	(void)fprintf(logfd, "[!] ");
-    if (fmt != NULL) {
-        (void)vfprintf(logfd, fmt, ap);
-	}
-    (void)fprintf(logfd, "\n");
-    fflush(logfd);
-    va_end(ap);
-}
-
-void
-logger_info(const char *fmt, ...)
-{
     va_list ap;
     time_t now;
     struct tm *current;
@@ -53,7 +39,19 @@ logger_info(const char *fmt, ...)
     time(&now);
     current = localtime(&now);
 
+    if(type == DBG && !debugged) {
+        return;
+    }
+
     va_start(ap, fmt);
+    switch(type) {
+        case WARN:
+            (void)fprintf(logfd, "[!] ");
+            break;
+        case FATAL:
+            (void)fprintf(logfd, "[-] ");
+            break;
+    }
 	(void)fprintf(logfd, "[%04d/%02d/%02d %02d:%02d:%02d] ",current->tm_year+1900, current->tm_mon+1, current->tm_mday, current->tm_hour, current->tm_min, current->tm_sec);
     if (fmt != NULL) {
         (void)vfprintf(logfd, fmt, ap);
@@ -62,20 +60,3 @@ logger_info(const char *fmt, ...)
     fflush(logfd);
     va_end(ap);
 }
-
-void
-logger_fatal(const char *fmt, ...)
-{
-    va_list ap;
-
-    va_start(ap, fmt);
-	(void)fprintf(logfd, "[-] ");
-    if (fmt != NULL) {
-        (void)vfprintf(logfd, fmt, ap);
-	}
-    (void)fprintf(logfd, "\n");
-    fflush(logfd);
-    va_end(ap);
-    exit(1);
-}
-

@@ -26,6 +26,8 @@
 #define LLC_TYPE_IP 0x0008
 #define HOP_DEFAULT_TIMEOUT 5
 
+int debugged = 0;
+
 // context for holding program state
 struct ctx {
     char *interface_inj;
@@ -59,6 +61,7 @@ void usage(char *argv[]) {
     printf("\t-f : fix channel, this will disable hopping and starts to always use first channel in list\n");
     printf("\t-t <time> : hop sleep time in sec(default = 5 sec)\n");
     printf("\t-l <file> : file describing configuration for matchers\n");
+    printf("\t-d : enable debug messages\n");
     printf("\n");
     printf("Example(for single interface): %s -i wlan0 -c 1,6,11\n", argv[0]);
     printf("Example(for dual interfaces): %s -m wlan0 -j wlan1 -c 1,6,11\n", argv[0]);
@@ -74,7 +77,7 @@ void sig_handler(int sig) {
     switch(sig) {
         case SIGINT:
             dead = 1;
-            printf("Got Ctrl+C, ending threads...\n");
+            (void) fprintf(stderr, "Got Ctrl+C, ending threads...\n");
             signal(SIGALRM, sig_handler);
             alarm(5);
             break;
@@ -153,15 +156,55 @@ matcher_entry *matchers_match(const char *data, int datalen, struct ctx *ctx) {
 
     for(matcher = ctx->matchers_list; matcher != NULL; matcher = matcher->next) {
         if(pcre_exec(matcher->match, NULL, data, datalen,  0, 0, ovector, 30) > 0) {
-            logger_info("Matched pattern for conf '%s'\n", matcher->name);
+            logger(DBG, "Matched pattern for conf '%s'\n", matcher->name);
             if(pcre_exec(matcher->ignore, NULL, data, datalen, 0, 0, ovector, 30) > 0) {
-                logger_info("Matched ignore for conf '%s'\n", matcher->name);
+                logger(DBG, "Matched ignore for conf '%s'\n", matcher->name);
             } else {
                 return matcher;
             }
         }
     }
     return NULL;
+}
+
+void spoof_response(const char *data, int datalen, struct ctx *ctx) {
+
+    matcher_entry *matcher;
+    char *response_data;
+    int response_datalen;
+
+    if(!(matcher = matchers_match((const char *)data, datalen, ctx))) {
+        logger(DBG, "No matchers found for data");
+        return;
+    }
+
+    if(matcher->response) {
+        response_data = matcher->response;
+        response_datalen = matcher->response_len;
+    } else if(matcher->pyfunc) {
+        PyObject *args = PyTuple_New(1);
+        PyTuple_SetItem(args,0,PyString_FromStringAndSize(data, datalen)); // here is data
+
+        PyObject *value = PyObject_CallObject(matcher->pyfunc, args);
+        if(value == NULL){
+            logger(DBG, "Python function returns no data!");
+            return;
+        }   
+  
+        response_data = PyString_AsString(value);
+        response_datalen = strlen(response_data);
+    } else {
+        logger(DBG, "There is no response data!");
+        return;
+    }
+
+    logger(DBG, "response_datalen: %d", response_datalen);
+    logger(DBG, "response_data: %s", response_data);
+
+    hexdump((u_char *) data, datalen);
+
+    return;
+
 }
 
 void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx) {
@@ -177,20 +220,18 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx) {
     u_char *udp_data;
     int udp_datalen;
 
-    matcher_entry *matcher;
-
     /* Calculate the size of the IP Header. ip_hdr->ihl contains the number of 32 bit
     words that represent the header size. Therfore to get the number of bytes
     multiple this number by 4 */
 
     ip_hdr = (struct iphdr *) (dot3);
     
-    logger_info("IP id:%d tos:0x%x version:%d iphlen:%d dglen:%d protocol:%d ttl:%d", ntohs(ip_hdr->id), ip_hdr->tos, ip_hdr->version, ip_hdr->ihl*4, ntohs(ip_hdr->tot_len), ip_hdr->protocol, ip_hdr->ttl);
-    logger_info("SRC: %s", inet_ntoa(*((struct in_addr *) &ip_hdr->saddr)));
-    logger_info("DST: %s", inet_ntoa(*((struct in_addr *) &ip_hdr->daddr)));
+    logger(DBG, "IP id:%d tos:0x%x version:%d iphlen:%d dglen:%d protocol:%d ttl:%d", ntohs(ip_hdr->id), ip_hdr->tos, ip_hdr->version, ip_hdr->ihl*4, ntohs(ip_hdr->tot_len), ip_hdr->protocol, ip_hdr->ttl);
+    logger(DBG, "SRC: %s", inet_ntoa(*((struct in_addr *) &ip_hdr->saddr)));
+    logger(DBG, "DST: %s", inet_ntoa(*((struct in_addr *) &ip_hdr->daddr)));
     
     if(ntohs(ip_hdr->tot_len) > dot3_len) {
-        logger_info("Ambicious len in IP header, skipping");
+        logger(DBG, "Ambicious len in IP header, skipping");
         return;
     }
 
@@ -202,8 +243,8 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx) {
             multiple this number by 4 */
             tcp_hdr = (struct tcphdr *) (dot3+sizeof(struct iphdr));
             tcp_datalen = ntohs(ip_hdr->tot_len) - (ip_hdr->ihl * 4) - (tcp_hdr->doff * 4);
-            logger_info("TCP src_port:%d dest_port:%d doff:%d datalen:%d ack:0x%x win:0x%x seq:%d", ntohs(tcp_hdr->source), ntohs(tcp_hdr->dest), tcp_hdr->doff*4, tcp_datalen, ntohs(tcp_hdr->window), ntohl(tcp_hdr->ack_seq), ntohs(tcp_hdr->seq));
-               logger_info("FLAGS %c%c%c%c%c%c",
+            logger(DBG, "TCP src_port:%d dest_port:%d doff:%d datalen:%d ack:0x%x win:0x%x seq:%d", ntohs(tcp_hdr->source), ntohs(tcp_hdr->dest), tcp_hdr->doff*4, tcp_datalen, ntohs(tcp_hdr->window), ntohl(tcp_hdr->ack_seq), ntohs(tcp_hdr->seq));
+               logger(DBG, "FLAGS %c%c%c%c%c%c",
                (tcp_hdr->urg ? 'U' : '*'),
                (tcp_hdr->ack ? 'A' : '*'),
                (tcp_hdr->psh ? 'P' : '*'),
@@ -213,46 +254,17 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx) {
 
             // make sure the packet isn't empty..
             if(tcp_datalen <= 0) {
-                logger_info("TCP datalen <= 0, ignoring it");
+                logger(DBG, "TCP datalen <= 0, ignoring it");
                 break;
             } 
 
             tcp_data = (u_char*) tcp_hdr + tcp_hdr->doff * 4;
-
-            if((matcher = matchers_match((const char *)tcp_data, tcp_datalen, ctx))) {
-
-/*
-  char *response_data;
-  uint32_t response_data_len;
-  
-  if(matcher->response) {
-    response_data = matcher->response;
-    response_data_len = matcher->response_len;
-  } else if(matcher->pyfunc) {
-    PyObject *args = PyTuple_New(1);
-    PyTuple_SetItem(args,0,PyString_FromStringAndSize(tcp_data, tcp_datalen)); // here is data
-
-    PyObject *value = PyObject_CallObject(matcher->pyfunc, args);
-    if(value == NULL){
-      printf("Python function returns no data!");
-      return;
-    }   
-  
-    response_data = PyString_AsString(value);
-    response_data_len = strlen(response_data);
-  } else {
-    printf("No data to inject!\n");
-    return;
-  }
-*/
-                hexdump((u_char *) tcp_data, tcp_datalen);
-            }
-
+            spoof_response((const char *)tcp_data, tcp_datalen, ctx);
             break;
         case IPPROTO_UDP:
             udp_hdr = (struct udphdr *) (dot3+sizeof(struct iphdr));
             udp_datalen = ntohs(udp_hdr->len) - sizeof(struct udphdr); 
-            logger_info("UDP src_port:%d dst_port:%d len:%d", ntohs(udp_hdr->source), ntohs(udp_hdr->dest), udp_datalen);
+            logger(DBG, "UDP src_port:%d dst_port:%d len:%d", ntohs(udp_hdr->source), ntohs(udp_hdr->dest), udp_datalen);
             udp_data = (u_char*) udp_hdr + sizeof(struct udphdr);
             
             hexdump((u_char *) udp_data, udp_datalen);
@@ -264,7 +276,7 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx) {
             icmp_hdr = (struct icmphdr *) (dot3+sizeof(struct iphdr));
             //memcpy(&id, (u_char*)icmphdr+4, 2);
             //memcpy(&seq, (u_char*)icmphdr+6, 2);
-            logger_info("ICMP type:%d code:%d", icmp_hdr->type, icmp_hdr->code);
+            logger(DBG, "ICMP type:%d code:%d", icmp_hdr->type, icmp_hdr->code);
             break;
     }
 
@@ -332,10 +344,10 @@ void process_wlan_packet(lorcon_packet_t *packet, struct ctx *ctx) {
 
     char ssid_name[256];
 
-    //logger_info("Packet, dlt: %d len: %d h_len: %d d_len: %d", packet->dlt, packet->length, packet->length_header, packet->length_data);
+    //logger(DBG, "Packet, dlt: %d len: %d h_len: %d d_len: %d", packet->dlt, packet->length, packet->length_header, packet->length_data);
 
     if(packet->extra_type != LORCON_PACKET_EXTRA_80211 || packet->extra_info == NULL) {
-        logger_warn("Packet has no extra, cannot be parsed");
+        logger(WARN, "Packet has no extra, cannot be parsed");
         hexdump((u_char *) packet->packet_raw, packet->length);
         return;
     } 
@@ -344,7 +356,7 @@ void process_wlan_packet(lorcon_packet_t *packet, struct ctx *ctx) {
 
     if(i_hdr->type == WLAN_FC_TYPE_DATA) { // data frames
             
-            logger_info("IEEE802.11 data, type:%d subtype:%d direction:%s protected:%c src_mac:[%02X:%02X:%02X:%02X:%02X:%02X] dst_mac:[%02X:%02X:%02X:%02X:%02X:%02X] bssid_mac:[%02X:%02X:%02X:%02X:%02X:%02X]", 
+            logger(DBG, "IEEE802.11 data, type:%d subtype:%d direction:%s protected:%c src_mac:[%02X:%02X:%02X:%02X:%02X:%02X] dst_mac:[%02X:%02X:%02X:%02X:%02X:%02X] bssid_mac:[%02X:%02X:%02X:%02X:%02X:%02X]", 
                     i_hdr->type, 
                     i_hdr->subtype, 
                     i_hdr->from_ds ? "from_ds -->":"to_ds <--", 
@@ -354,19 +366,19 @@ void process_wlan_packet(lorcon_packet_t *packet, struct ctx *ctx) {
                     i_hdr->bssid_mac[0], i_hdr->bssid_mac[1], i_hdr->bssid_mac[2], i_hdr->bssid_mac[3], i_hdr->bssid_mac[4], i_hdr->bssid_mac[5]);
             
             if(i_hdr->protected) {
-                logger_info("\tWe are not interested in protected packets, skipping it");
+                logger(DBG, "\tWe are not interested in protected packets, skipping it");
                 return;
             }
 
             if(!(i_hdr->to_ds) || i_hdr->from_ds) {
-                logger_info("\tPacket from DS, skipping it");
+                logger(DBG, "\tPacket from DS, skipping it");
                 return;
             }
 
             switch(i_hdr->subtype) {
                 case WLAN_FC_SUBTYPE_QOSDATA:
                     if(packet->length_data == 0) {
-                        logger_info("\tWe are not interested in empty packets, skipping it");
+                        logger(DBG, "\tWe are not interested in empty packets, skipping it");
                         break;
                     }
 
@@ -376,7 +388,7 @@ void process_wlan_packet(lorcon_packet_t *packet, struct ctx *ctx) {
                             process_ip_packet(packet->packet_data, packet->length_data, ctx);
                             break;
                         default:
-                            logger_info("\tLLC said that packet has no IP layer, skipping it");
+                            logger(DBG, "\tLLC said that packet has no IP layer, skipping it");
                             break;
                     }
 
@@ -390,15 +402,15 @@ void process_wlan_packet(lorcon_packet_t *packet, struct ctx *ctx) {
         switch(i_hdr->subtype) {
             case WLAN_FC_SUBTYPE_BEACON:
                 get_ssid(packet->packet_header, ssid_name, sizeof(ssid_name));
-                //logger_info("IEEE802.11 beacon frame, ssid: (%s)", ssid_name);
+                //logger(DBG, "IEEE802.11 beacon frame, ssid: (%s)", ssid_name);
                 break;
             case WLAN_FC_SUBTYPE_PROBEREQ:
                 get_ssid(packet->packet_header, ssid_name, sizeof(ssid_name));
-                //logger_info("IEEE802.11 probe request, ssid: (%s)", ssid_name);
+                //logger(DBG, "IEEE802.11 probe request, ssid: (%s)", ssid_name);
                 break;
             case WLAN_FC_SUBTYPE_PROBERESP:
                 get_ssid(packet->packet_header, ssid_name, sizeof(ssid_name));
-                //logger_info("IEEE802.11 probe response, ssid: (%s)", ssid_name);
+                //logger(DBG, "IEEE802.11 probe response, ssid: (%s)", ssid_name);
                 break;
         }
     } else if(i_hdr->type == WLAN_FC_TYPE_CTRL) { // control frames
@@ -555,30 +567,30 @@ lorcon_t *init_lorcon_interface(const char *interface) {
 	// Automatically determine the driver of the interface
 	
 	if ((driver = lorcon_auto_driver(interface)) == NULL) {
-		logger_fatal("Could not determine the driver for %s", interface);
+		logger(FATAL, "Could not determine the driver for %s", interface);
 		return NULL;
 	} 
 
 	// Create LORCON context for interface
     if ((context = lorcon_create(interface, driver)) == NULL) {
-        logger_fatal("Failed to create context");
+        logger(FATAL, "Failed to create context");
         return NULL; 
     }
 
 	// Create inject+monitor mode interface
 	if (lorcon_open_injmon(context) < 0) {
-		logger_fatal("Could not create inject+monitor mode interface!");
+		logger(FATAL, "Could not create inject+monitor mode interface!");
 		return NULL;
 	} 
 
     r = lorcon_get_hwmac(context, &mac);
     if(r < 0 ) {
-        logger_warn("Fail to fetch HW addr from: %s", interface);
+        logger(WARN, "Fail to fetch HW addr from: %s", interface);
     } else if (r == 0) {
-        logger_warn("HW addr is not set on: %s", interface);
+        logger(WARN, "HW addr is not set on: %s", interface);
     }
 
-    logger_info("Interface: %s, Driver: %s, VAP: %s, HW: %02x:%02x:%02x:%02x:%02x:%02x", interface, driver->name, lorcon_get_vap(context), mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    logger(INFO, "Interface: %s, Driver: %s, VAP: %s, HW: %02x:%02x:%02x:%02x:%02x:%02x", interface, driver->name, lorcon_get_vap(context), mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
 	lorcon_free_driver_list(driver);
 
@@ -597,7 +609,7 @@ void *loop_thread(void *arg) {
     struct ctx *ctx = (struct ctx *)arg;
 
     lorcon_loop(ctx->context_mon, 0, process_packet, (u_char*)ctx);
-    logger_info("Got dead! Loop thread is closing now");
+    logger(DBG, "Got dead! Loop thread is closing now");
     return NULL;
 }
 
@@ -608,7 +620,7 @@ void *channel_thread(void *arg) {
 
     if(ctx->channel_fix) {
         // set first in array
-        logger_info("Default channel set: %d", ctx->channels[0]);
+        logger(INFO, "Default channel set: %d", ctx->channels[0]);
         lorcon_set_channel(ctx->context_inj, ctx->channels[0]);
         lorcon_set_channel(ctx->context_mon, ctx->channels[0]); 
     } else {
@@ -616,11 +628,11 @@ void *channel_thread(void *arg) {
         while(1) {
             for(ch_c = 0; ch_c < sizeof(ctx->channels); ch_c++) {
                 if(dead) {
-                    logger_info("Got dead! Channel thread is closing now");
+                    logger(INFO, "Got dead! Channel thread is closing now");
                     return NULL;
                 }
                 if(!ctx->channels[ch_c]) break;
-                logger_info("Periodical channel change: %d", ctx->channels[ch_c]);
+                logger(DBG, "Periodical channel change: %d", ctx->channels[ch_c]);
                 lorcon_set_channel(ctx->context_inj, ctx->channels[ch_c]);
                 lorcon_set_channel(ctx->context_mon, ctx->channels[ch_c]);
                 sleep(ctx->hop_time);
@@ -657,7 +669,7 @@ int main(int argc, char *argv[]) {
 
 	// This handles all of the command line arguments
 	
-	while ((c = getopt(argc, argv, "i:c:j:m:ft:l:k:h")) != EOF) {
+	while ((c = getopt(argc, argv, "i:c:j:m:ft:l:k:hd")) != EOF) {
 		switch (c) {
 			case 'i': 
 				ctx->interface_inj = strdup(optarg);
@@ -696,6 +708,9 @@ int main(int argc, char *argv[]) {
 			case 'h':
 				usage(argv);
 				break;
+            case 'd':
+                debugged = 1;
+                break;
 			default:
 				usage(argv);
 				break;
@@ -732,15 +747,15 @@ int main(int argc, char *argv[]) {
     }
 
     // The following is all of the standard interface, driver, and context setup
-	logger_info("Initializing %s interface for inject", ctx->interface_inj);
+	logger(INFO, "Initializing %s interface for inject", ctx->interface_inj);
     if((ctx->context_inj = init_lorcon_interface(ctx->interface_inj)) == NULL) {
-        logger_fatal("Fail to initialize inject interface: %s", ctx->interface_inj);
+        logger(FATAL, "Fail to initialize inject interface: %s", ctx->interface_inj);
         return -1;
     }
 
-	logger_info("Initializing %s interface for monitor", ctx->interface_mon);
+	logger(INFO, "Initializing %s interface for monitor", ctx->interface_mon);
     if((ctx->context_mon = init_lorcon_interface(ctx->interface_mon)) == NULL) {
-        logger_fatal("Fail to initialize monitor interface: %s", ctx->interface_mon);
+        logger(FATAL, "Fail to initialize monitor interface: %s", ctx->interface_mon);
         return -1;
     }
 
@@ -751,35 +766,35 @@ int main(int argc, char *argv[]) {
     for (ch_c = 0; ch_c <= sizeof(ctx->channels); ch_c++) {
         if(!ctx->channels[ch_c]) break;
         if(ch_c == 0) {
-    	    logger_info("Using monitor and injection channel: %d (default if channel fix defined)", ctx->channels[ch_c]);
+    	    logger(INFO, "Using monitor and injection channel: %d (default if channel fix defined)", ctx->channels[ch_c]);
         } else {
-    	    logger_info("Using monitor and injection channel: %d", ctx->channels[ch_c]);
+    	    logger(INFO, "Using monitor and injection channel: %d", ctx->channels[ch_c]);
         }
     }
 
     // Create threads
 
     if(pthread_create(&loop_tid, NULL, loop_thread, ctx)){
-        logger_fatal("Error in pcap pthread_create");
+        logger(FATAL, "Error in pcap pthread_create");
         return -1;
     }
 
     if(pthread_create(&channel_tid, NULL, channel_thread, ctx)){
-        logger_fatal("Error in channel pthread_create");
+        logger(FATAL, "Error in channel pthread_create");
         return -1;
     }
 
     // Wait for threads to join
     
     if(pthread_join(channel_tid, NULL)) {
-        logger_fatal("Error joining channel thread");
+        logger(FATAL, "Error joining channel thread");
     }
 
     if(pthread_join(loop_tid, NULL)) {
-        logger_fatal("Error joining pcap thread");
+        logger(FATAL, "Error joining pcap thread");
     }
 
-    logger_info("We are done");
+    logger(INFO, "We are done");
     // The following is all of the standard cleanup stuff
 	clear_lorcon_interface(ctx->context_inj);	
 	clear_lorcon_interface(ctx->context_mon);	
