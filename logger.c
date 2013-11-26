@@ -14,14 +14,14 @@ static FILE *logfd;
 extern int debugged;
 
 int logger_init(const char *filename) {
-	FILE *fd;
+    FILE *fd;
 
-	if(filename) {
-		if((fd = fopen(filename, "a"))) {
-			logfd = fd;	
-			return(1);
-		}
-	} else {
+    if(filename) {
+        if((fd = fopen(filename, "a"))) {
+            logfd = fd;
+            return(1);
+        }
+    } else {
         logfd = stdout;
         return(1);
     }
@@ -43,17 +43,17 @@ void logger(int type, const char *fmt, ...) {
 
     va_start(ap, fmt);
     switch(type) {
-        case WARN:
-            (void)fprintf(logfd, "[!] ");
-            break;
-        case FATAL:
-            (void)fprintf(logfd, "[-] ");
-            break;
+    case WARN:
+        (void)fprintf(logfd, "[!] ");
+        break;
+    case FATAL:
+        (void)fprintf(logfd, "[-] ");
+        break;
     }
-	(void)fprintf(logfd, "[%04d/%02d/%02d %02d:%02d:%02d] ",current->tm_year+1900, current->tm_mon+1, current->tm_mday, current->tm_hour, current->tm_min, current->tm_sec);
+    (void)fprintf(logfd, "[%04d/%02d/%02d %02d:%02d:%02d] ",current->tm_year+1900, current->tm_mon+1, current->tm_mday, current->tm_hour, current->tm_min, current->tm_sec);
     if (fmt != NULL) {
         (void)vfprintf(logfd, fmt, ap);
-	}
+    }
     (void)fprintf(logfd, "\n");
     fflush(logfd);
     va_end(ap);
