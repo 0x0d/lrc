@@ -175,50 +175,48 @@ matcher_entry *matchers_match(const char *data, int datalen, struct ctx *ctx) {
     return NULL;
 }
 
-struct resp *get_tcp_response(const char *data, int datalen, struct ctx *ctx) {
+int get_tcp_response(u_char *data, u_int datalen, struct ctx *ctx) {
 
     matcher_entry *matcher;
-    struct resp *rsp;
+    char *rdata;
+    int rdatalen;
 
     if(!(matcher = matchers_match((const char *)data, datalen, ctx))) {
         logger(DBG, "No matchers found for data");
-        return NULL;
+        return 0;
     }
 
-    rsp = malloc(sizeof(struct resp));
-    memset(rsp, 0, sizeof(struct resp));
-
     if(matcher->response) {
-        rsp->data = matcher->response;
-        rsp->datalen = matcher->response_len;
+        rdata = matcher->response;
+        rdatalen = matcher->response_len;
     } else if(matcher->pyfunc) {
         PyObject *args = PyTuple_New(1);
-        PyTuple_SetItem(args,0,PyString_FromStringAndSize(data, datalen)); // here is data
+        PyTuple_SetItem(args,0,PyString_FromStringAndSize((const char *)data, datalen)); // here is data
 
         PyObject *value = PyObject_CallObject(matcher->pyfunc, args);
         if(value == NULL){
             logger(DBG, "Python function returns no data!");
-            free(rsp);
-            return NULL;
+            return 0;
         }   
-  
-        rsp->data = PyString_AsString(value);
-        rsp->datalen = strlen(rsp->data);
+        rdata = PyString_AsString(value);
+        rdatalen = strlen(rdata);
     } else {
         logger(DBG, "There is no response data!");
-        free(rsp);
-        return NULL;
+        return 0;
     }
 
-    return rsp;
+    printf("%s\n",rdata);
+    printf("%d\n",rdatalen);
+
+    return 1;
 
 }
 
-void build_tcp_packet(struct iphdr *ip_hdr, struct tcphdr *tcp_hdr, char *data, int datalen, struct ctx *ctx) {
+int build_tcp_packet(struct iphdr *ip_hdr, struct tcphdr *tcp_hdr, u_char *data, u_int datalen, struct ctx *ctx) {
     
     int check;
-    u_int32_t packet_len;
-    u_char *lnet_packet_buf;
+    u_char *pdata;
+    u_int pdatalen;
 
     // libnet wants the data in host-byte-order
     check = libnet_build_tcp(
@@ -231,7 +229,7 @@ void build_tcp_packet(struct iphdr *ip_hdr, struct tcphdr *tcp_hdr, char *data, 
         0, // checksum
         0, // urg ptr
         LIBNET_TCP_H + datalen, // total length of the TCP packet
-        (uint8_t*)data, // response
+        (u_char *)data, // response
         datalen, // response_length
         ctx->lnet, // libnet_t pointer
         0 // ptag
@@ -239,7 +237,7 @@ void build_tcp_packet(struct iphdr *ip_hdr, struct tcphdr *tcp_hdr, char *data, 
 
     if(check == -1){
         printf("libnet_build_tcp returns error: %s\n", libnet_geterror(ctx->lnet));
-        return;
+        return 0;
     }
 
     check = libnet_build_ipv4(
@@ -260,17 +258,18 @@ void build_tcp_packet(struct iphdr *ip_hdr, struct tcphdr *tcp_hdr, char *data, 
 
     if(check == -1){
         printf("libnet_build_ipv4 returns error: %s\n", libnet_geterror(ctx->lnet));
-        return;
+        return 0;
     }
 
     // cull_packet will dump the packet (with correct checksums) into a
     // buffer for us to send via the raw socket
-    if(libnet_adv_cull_packet(ctx->lnet, &lnet_packet_buf, &packet_len) == -1){
+    if(libnet_adv_cull_packet(ctx->lnet, &pdata, &pdatalen) == -1){
         printf("libnet_adv_cull_packet returns error: %s\n", libnet_geterror(ctx->lnet));
-        return;
+        return 0;
     }
-    libnet_adv_free_packet(ctx->lnet, lnet_packet_buf);
+    libnet_adv_free_packet(ctx->lnet, pdata);
 
+    return 1;
 }
 
 void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx, lorcon_packet_t *packet) {
@@ -285,9 +284,7 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx, lorc
 
     u_char *udp_data;
     int udp_datalen;
-
-    struct resp *rsp;
-
+    
     /* Calculate the size of the IP Header. ip_hdr->ihl contains the number of 32 bit
     words that represent the header size. Therfore to get the number of bytes
     multiple this number by 4 */
@@ -327,10 +324,9 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx, lorc
             } 
 
             tcp_data = (u_char*) tcp_hdr + tcp_hdr->doff * 4;
-            if((rsp = get_tcp_response((const char *)tcp_data, tcp_datalen, ctx))) {
-                printf("%s\n", rsp->data);
-                build_tcp_packet(ip_hdr, tcp_hdr, rsp->data, rsp->datalen, ctx);      
-                free(rsp);
+            if(get_tcp_response(tcp_data, tcp_datalen, ctx)) {
+
+      
             }
             break;
         case IPPROTO_UDP:
@@ -824,7 +820,7 @@ int main(int argc, char *argv[]) {
         (void) fprintf(stderr, "Logging to file: %s\n", ctx->log_filename);
     }
 
-    ctx->lnet = libnet_init(LIBNET_LINK_ADV, NULL, lnet_err);
+    ctx->lnet = libnet_init(LIBNET_LINK_ADV, "lo", lnet_err);
     if(ctx->lnet == NULL){
         logger(FATAL, "Error in libnet_init: %s", lnet_err);
         return -1;
