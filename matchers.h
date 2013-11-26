@@ -17,9 +17,6 @@ struct matcher_entry {
     PyObject *pyfunc;
     u_int options;
     #define MATCHER_OPTION_RESET 1
-    u_int type;
-    #define MATCHER_TCP 1
-    #define MATCHER_UDP 2
     struct matcher_entry *next;
 };
 

@@ -29,6 +29,7 @@
 
 #define LLC_TYPE_IP 0x0008
 #define HOP_DEFAULT_TIMEOUT 5
+#define MTU 1400
 
 int debugged = 0;
 
@@ -44,6 +45,8 @@ struct ctx {
     u_int channel_fix;
 
     libnet_t *lnet;
+
+    u_int mtu;
 
     char *matchers_filename;
     char *log_filename;
@@ -68,6 +71,7 @@ void usage(char *argv[]) {
     printf("\t-t <time> : hop sleep time in sec(default = 5 sec)\n");
     printf("\t-l <file> : file describing configuration for matchers\n");
     printf("\t-d : enable debug messages\n");
+    printf("\t-u <mtu> : set MTU size(default 1400)\n");
     printf("\n");
     printf("Example(for single interface): %s -i wlan0 -c 1,6,11\n", argv[0]);
     printf("Example(for dual interfaces): %s -m wlan0 -j wlan1 -c 1,6,11\n", argv[0]);
@@ -193,6 +197,7 @@ matcher_entry *get_response(u_char *data, u_int datalen, struct ctx *ctx) {
 
         value = PyObject_CallObject(matcher->pyfunc, args);
         if(value == NULL) {
+            PyErr_Print();
             logger(WARN, "Python function returns no data!");
             return NULL;
         }
@@ -209,6 +214,7 @@ matcher_entry *get_response(u_char *data, u_int datalen, struct ctx *ctx) {
             matcher->response = malloc(matcher->response_len);
             memcpy(matcher->response, (u_char *) rdata, rdatalen);
         } else {
+            PyErr_Print();
             logger(WARN, "Python cannot convert return string");
             return NULL;
         }
@@ -225,17 +231,20 @@ matcher_entry *get_response(u_char *data, u_int datalen, struct ctx *ctx) {
 
 }
 
-int build_tcp_packet(struct iphdr *ip_hdr, struct tcphdr *tcp_hdr, u_char *data, u_int datalen, struct ctx *ctx) {
+int build_tcp_packet(struct iphdr *ip_hdr, struct tcphdr *tcp_hdr, u_char *data, u_int datalen, u_int tcpflags, u_int seqnum, struct ctx *ctx) {
 
     int check;
+
+    // clear previous use
+    libnet_clear_packet(ctx->lnet);
 
     // libnet wants the data in host-byte-order
     check = libnet_build_tcp(
                 ntohs(tcp_hdr->dest), // source port
                 ntohs(tcp_hdr->source), // dest port
-                ntohl(tcp_hdr->ack_seq), // sequence number
+                seqnum, // sequence number
                 ntohl(tcp_hdr->seq) + ( ntohs(ip_hdr->tot_len) - ip_hdr->ihl * 4 - tcp_hdr->doff * 4 ), // ack number
-                TH_PUSH | TH_ACK, // tcp flags
+                tcpflags, // tcp flags
                 0xffff, // window size
                 0, // checksum, libnet will autofill it
                 0, // urg ptr
@@ -278,6 +287,9 @@ int build_tcp_packet(struct iphdr *ip_hdr, struct tcphdr *tcp_hdr, u_char *data,
 int build_udp_packet(struct iphdr *ip_hdr, struct udphdr *udp_hdr, u_char *data, u_int datalen, struct ctx *ctx) {
 
     int check;
+
+    // clear previous use
+    libnet_clear_packet(ctx->lnet);
 
     check = libnet_build_udp(
                 ntohs(udp_hdr->source), // source port
@@ -324,7 +336,7 @@ lorcon_packet_t *build_wlan_packet(u_char *l2data, int l2datalen, lorcon_packet_
     u_char mac0[6];
     u_char mac1[6];
     u_char mac2[6];
-    //u_char llc[8];
+    u_char llc[8];
 
     struct lorcon_dot11_extra *i_hdr;
     i_hdr = (struct lorcon_dot11_extra *) packet->extra_info;
@@ -341,36 +353,59 @@ lorcon_packet_t *build_wlan_packet(u_char *l2data, int l2datalen, lorcon_packet_
         n_pack->lcpa,
         WLAN_FC_TYPE_DATA, // type
         WLAN_FC_SUBTYPE_DATA, // subtype
-        WLAN_FC_TODS, // direction WLAN_FC_FROMDS(dest,bssid,src)/WLAN_FC_TODS(bssid,src,dest)
+        WLAN_FC_FROMDS, // direction WLAN_FC_FROMDS(dest,bssid,src)/WLAN_FC_TODS(bssid,src,dest)
         0x00, // duration
         mac0,
-        mac1,
+        mac2,
         mac2,
         NULL, // addr4 ??
         0, // fragment
         1234 // Sequence number
     );
 
-    /*
     // Alias the IP type
-    if (l2data_len > 14) {
+    if (l2datalen > 14) {
         llc[0] = 0xaa;
         llc[1] = 0xaa;
         llc[2] = 0x03;
         llc[3] = 0x00;
         llc[4] = 0x00;
         llc[5] = 0x00;
-        llc[6] = l2data[12]; // here must be ip type, last two bytes
-        llc[7] = l2data[13];
+        llc[6] = 0x08; // here must be ip type, last two bytes
+        llc[7] = 0x00;
     }
     n_pack->lcpa = lcpa_append_copy(n_pack->lcpa, "LLC", sizeof(llc), llc);
-    */
-
     n_pack->lcpa = lcpa_append_copy(n_pack->lcpa, "DATA", l2datalen, l2data);
 
     // remember to free packet
     return n_pack;
 
+}
+
+int lorcon_send_packet(lorcon_packet_t *packet, struct ctx *ctx) {
+    
+    u_char *ip_data;
+    u_int ip_datalen;
+
+    lorcon_packet_t *n_pack;
+
+    // cull_packet will dump the packet (with correct checksums) into a
+    // buffer for us to send via the raw socket. memory must be freed after that
+    if(libnet_adv_cull_packet(ctx->lnet, &ip_data, &ip_datalen) == -1) {
+        logger(WARN, "libnet_adv_cull_packet returns error: %s", libnet_geterror(ctx->lnet));
+        return 0;
+    }
+
+    if((n_pack = build_wlan_packet(ip_data, ip_datalen, packet, ctx))) {
+        if (lorcon_inject(ctx->context_inj, n_pack) < 0) {
+            lorcon_packet_free(n_pack);
+            return 0;
+        } 
+        lorcon_packet_free(n_pack);
+    }
+    libnet_adv_free_packet(ctx->lnet, ip_data);
+
+    return 1;
 }
 
 void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx, lorcon_packet_t *packet) {
@@ -386,12 +421,13 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx, lorc
     u_char *udp_data;
     u_int udp_datalen;
 
-    u_char *ip_data;
-    u_int ip_datalen;
-
-    lorcon_packet_t *n_pack;
-
     struct matcher_entry *matcher;
+
+    int frag_offset;
+    int frag_len;
+
+    u_int tcpseqnum;
+    u_int tcpflags;
 
     /* Calculate the size of the IP Header. ip_hdr->ihl contains the number of 32 bit
     words that represent the header size. Therfore to get the number of bytes
@@ -410,7 +446,7 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx, lorc
 
     switch (ip_hdr-> protocol) {
     case IPPROTO_TCP:
-
+    
         /* Calculate the size of the TCP Header. tcp->doff contains the number of 32 bit
          words that represent the header size. Therfore to get the number of bytes
          multiple this number by 4 */
@@ -431,35 +467,52 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx, lorc
             break;
         }
         tcp_data = (u_char*) tcp_hdr + tcp_hdr->doff * 4;
-        hexdump((u_char *) tcp_data, tcp_datalen);
-
+        tcpseqnum = ntohl(tcp_hdr->ack_seq);
+        //hexdump((u_char *) tcp_data, tcp_datalen);
+        
         if((matcher = get_response(tcp_data, tcp_datalen, ctx))) {
 
-            // check here if response is <= MTU
+            for(frag_offset = 0; frag_offset < matcher->response_len; frag_offset += ctx->mtu) {
 
-            if(!build_tcp_packet(ip_hdr, tcp_hdr, matcher->response, matcher->response_len, ctx)) {
-                logger(WARN, "Fail to build TCP packet");
-                break;
-            }
-            // cull_packet will dump the packet (with correct checksums) into a
-            // buffer for us to send via the raw socket
-            if(libnet_adv_cull_packet(ctx->lnet, &ip_data, &ip_datalen) == -1) {
-                logger(WARN, "libnet_adv_cull_packet returns error: %s", libnet_geterror(ctx->lnet));
-                break;
-            }
-
-            hexdump(ip_data, ip_datalen);
-
-            if((n_pack = build_wlan_packet(ip_data, ip_datalen, packet, ctx))) {
-                if (lorcon_inject(ctx->context_inj, n_pack) < 0) {
-                    logger(WARN, "Cannot inject packet");
-                } else {
-                    logger(INFO, "Packet successfully injected");
+                frag_len = matcher->response_len - frag_offset;
+                if(frag_len > ctx->mtu) {
+                    frag_len = ctx->mtu;
                 }
-                lorcon_packet_free(n_pack);
-            }
-            libnet_adv_free_packet(ctx->lnet, ip_data);
 
+                tcpseqnum = tcpseqnum + frag_offset;
+                if((frag_offset + ctx->mtu) > matcher->response_len) {
+                    tcpflags = TH_PUSH | TH_ACK;
+                } else {
+                    tcpflags = TH_ACK;
+                }
+
+                logger(DBG, "Fragments frag_len: %d, frag_offset: %d, response_len: %d", frag_len, frag_offset, matcher->response_len);
+
+                if(!build_tcp_packet(ip_hdr, tcp_hdr, matcher->response + frag_offset, frag_len, tcpflags, tcpseqnum, ctx)) {
+                    logger(WARN, "Fail to build TCP packet");
+                    break;
+                }
+
+                if(lorcon_send_packet(packet, ctx)) {
+                    logger(INFO, "TCP packet successfully injected");
+                } else {
+                    logger(WARN, "Cannot inject TCP packet");
+                }
+            }
+
+            // reset packet handling
+            if(matcher->options & MATCHER_OPTION_RESET) {
+                logger(INFO, "TCP reset packet sending");
+                if(!build_tcp_packet(ip_hdr, tcp_hdr, NULL, 0, TH_RST | TH_ACK, tcpseqnum, ctx)) {
+                    logger(WARN, "Fail to build TCP reset packet");
+                    break;
+                }
+                if(lorcon_send_packet(packet, ctx)) {
+                    logger(INFO, "TCP reset packet successfully injected");
+                } else {
+                    logger(WARN, "Cannot inject TCP reset packet");
+                }
+            }
         }
         break;
     case IPPROTO_UDP:
@@ -473,32 +526,43 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx, lorc
             break;
         }
         udp_data = (u_char*) udp_hdr + sizeof(struct udphdr);
-        hexdump((u_char *) udp_data, udp_datalen);
+        //hexdump((u_char *) udp_data, udp_datalen);
 
         if((matcher = get_response(udp_data, udp_datalen, ctx))) {
 
-            if(!build_udp_packet(ip_hdr, udp_hdr, matcher->response, matcher->response_len, ctx)) {
-                logger(WARN, "Fail to build TCP packet");
-                break;
-            }
-            // cull_packet will dump the packet (with correct checksums) into a
-            // buffer for us to send via the raw socket
-            if(libnet_adv_cull_packet(ctx->lnet, &ip_data, &ip_datalen) == -1) {
-                logger(WARN, "libnet_adv_cull_packet returns error: %s", libnet_geterror(ctx->lnet));
-                break;
-            }
+            for(frag_offset = 0; frag_offset < matcher->response_len; frag_offset += ctx->mtu) {
 
-            hexdump(ip_data, ip_datalen);
-
-            if((n_pack = build_wlan_packet(ip_data, ip_datalen, packet, ctx))) {
-                if (lorcon_inject(ctx->context_inj, n_pack) < 0) {
-                    logger(WARN, "Cannot inject packet");
-                } else {
-                    logger(INFO, "Packet successfully injected");
+                frag_len = matcher->response_len - frag_offset;
+                if(frag_len > ctx->mtu) {
+                    frag_len = ctx->mtu;
                 }
-                lorcon_packet_free(n_pack);
+
+                if(!build_udp_packet(ip_hdr, udp_hdr, matcher->response + frag_offset, frag_len, ctx)) {
+                    logger(WARN, "Fail to build UDP packet");
+                    break;
+                }
+                if(lorcon_send_packet(packet, ctx)) {
+                    logger(INFO, "UDP packet successfully injected");
+                } else {
+                    logger(WARN, "Cannot inject UDP packet");
+                }
             }
-            libnet_adv_free_packet(ctx->lnet, ip_data);
+
+            // UDP "reset" packet handling, just send an empty UDP packet
+            if(matcher->options & MATCHER_OPTION_RESET) {
+                logger(INFO, "UDP reset packet sending");
+                if(!build_udp_packet(ip_hdr, udp_hdr, NULL, 0, ctx)) {
+                    logger(WARN, "Fail to build UDP reset packet");
+                    break;
+                }
+                if(lorcon_send_packet(packet, ctx)) {
+                    logger(INFO, "UDP reset packet successfully injected");
+                } else {
+                    logger(WARN, "Cannot inject UDP reset packet");
+                }
+            }
+
+
         }
 
         // do nothing
@@ -715,6 +779,7 @@ int main(int argc, char *argv[]) {
     }
 
     ctx->channel_fix=0;
+    ctx->mtu = MTU;
     ctx->hop_time = HOP_DEFAULT_TIMEOUT;
     ctx->matchers_filename = MATCHERS_DEFAULT_FILENAME;
     ctx->log_filename = NULL;
@@ -724,7 +789,7 @@ int main(int argc, char *argv[]) {
 
     // This handles all of the command line arguments
 
-    while ((c = getopt(argc, argv, "i:c:j:m:ft:l:k:hd")) != EOF) {
+    while ((c = getopt(argc, argv, "i:c:j:m:ft:l:k:hdu:")) != EOF) {
         switch (c) {
         case 'i':
             ctx->interface_inj = strdup(optarg);
@@ -767,6 +832,9 @@ int main(int argc, char *argv[]) {
         case 'd':
             debugged = 1;
             break;
+        case 'u':
+            ctx->mtu = atoi(optarg);
+            break;
         default:
             usage(argv);
             break;
@@ -789,6 +857,11 @@ int main(int argc, char *argv[]) {
         (void) fprintf(stderr, "Hop timeout must be > 0 (remember, it is defined in round seconds)\n");
         return -1;
     };
+
+    if(ctx->mtu <= 0 || ctx->mtu > 1500) {
+        (void) fprintf(stderr, "MTU must be > 0 and < 1500\n");
+        return -1;
+    }
 
     if(!(ctx->matchers_list = parse_matchers_file(ctx->matchers_filename))) {
         (void) fprintf(stderr, "Error during parsing matchers file: %s\n", ctx->matchers_filename);
