@@ -12,10 +12,10 @@ struct matcher_entry {
     char name[64];
     pcre *match;
     pcre *ignore;
-    char *response;
+    u_char *response;
+    u_int response_len;
     PyObject *pyfunc;
-    unsigned int response_len;
-    unsigned int options;
+    u_int options;
     #define MATCHER_OPTION_RESET 1
     struct matcher_entry *next;
 };

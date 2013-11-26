@@ -52,9 +52,9 @@ struct ctx {
     lorcon_t *context_mon;
 };
 
-struct resp {
-    char *data;
-    int datalen;
+struct matcher_response {
+    u_char *data;
+    u_int len;
 };
 
 int dead;
@@ -164,9 +164,9 @@ matcher_entry *matchers_match(const char *data, int datalen, struct ctx *ctx) {
 
     for(matcher = ctx->matchers_list; matcher != NULL; matcher = matcher->next) {
         if(pcre_exec(matcher->match, NULL, data, datalen,  0, 0, ovector, 30) > 0) {
-            logger(DBG, "Matched pattern for conf '%s'\n", matcher->name);
+            logger(DBG, "Matched pattern for conf '%s'", matcher->name);
             if(pcre_exec(matcher->ignore, NULL, data, datalen, 0, 0, ovector, 30) > 0) {
-                logger(DBG, "Matched ignore for conf '%s'\n", matcher->name);
+                logger(DBG, "Matched ignore for conf '%s'", matcher->name);
             } else {
                 return matcher;
             }
@@ -175,48 +175,61 @@ matcher_entry *matchers_match(const char *data, int datalen, struct ctx *ctx) {
     return NULL;
 }
 
-int get_tcp_response(u_char *data, u_int datalen, struct ctx *ctx) {
+matcher_entry *get_tcp_response(u_char *data, u_int datalen, struct ctx *ctx) {
 
     matcher_entry *matcher;
+    PyObject *args;
+    PyObject *value;
+    Py_ssize_t rdatalen;
     char *rdata;
-    int rdatalen;
 
     if(!(matcher = matchers_match((const char *)data, datalen, ctx))) {
         logger(DBG, "No matchers found for data");
-        return 0;
+        return NULL;
     }
-
-    if(matcher->response) {
-        rdata = matcher->response;
-        rdatalen = matcher->response_len;
-    } else if(matcher->pyfunc) {
-        PyObject *args = PyTuple_New(1);
+   
+    if(matcher->pyfunc) {
+        logger(DBG, "We have a Python code to construct response");
+        args = PyTuple_New(1);
         PyTuple_SetItem(args,0,PyString_FromStringAndSize((const char *)data, datalen)); // here is data
 
-        PyObject *value = PyObject_CallObject(matcher->pyfunc, args);
+        value = PyObject_CallObject(matcher->pyfunc, args);
         if(value == NULL){
-            logger(DBG, "Python function returns no data!");
-            return 0;
-        }   
+            logger(WARN, "Python function returns no data!");
+            return NULL;
+        } 
+
         rdata = PyString_AsString(value);
-        rdatalen = strlen(rdata);
-    } else {
-        logger(DBG, "There is no response data!");
-        return 0;
+        rdatalen = PyString_Size(value);
+
+        if(rdata != NULL && rdatalen > 0) {
+            matcher->response_len = (u_int) rdatalen;
+            if(matcher->response) {
+                // We already have previous response, free it
+                free(matcher->response);
+            }
+            matcher->response = malloc(matcher->response_len);
+            memcpy(matcher->response, (u_char *) rdata, rdatalen);
+        } else {
+            logger(WARN, "Python cannot convert return string");
+            return NULL;
+        }
+        return matcher; 
+    } 
+
+    if(matcher->response) {
+        logger(DBG, "We have a plain text response");
+        return matcher;
     }
-
-    printf("%s\n",rdata);
-    printf("%d\n",rdatalen);
-
-    return 1;
+ 
+    logger(WARN, "There is no response data!");
+    return NULL;
 
 }
 
-int build_tcp_packet(struct iphdr *ip_hdr, struct tcphdr *tcp_hdr, u_char *data, u_int datalen, struct ctx *ctx) {
+int build_libnet_tcp_packet(struct iphdr *ip_hdr, struct tcphdr *tcp_hdr, u_char *data, u_int datalen, struct ctx *ctx) {
     
     int check;
-    u_char *pdata;
-    u_int pdatalen;
 
     // libnet wants the data in host-byte-order
     check = libnet_build_tcp(
@@ -236,7 +249,7 @@ int build_tcp_packet(struct iphdr *ip_hdr, struct tcphdr *tcp_hdr, u_char *data,
     );
 
     if(check == -1){
-        printf("libnet_build_tcp returns error: %s\n", libnet_geterror(ctx->lnet));
+        logger(WARN, "libnet_build_tcp returns error: %s", libnet_geterror(ctx->lnet));
         return 0;
     }
 
@@ -257,17 +270,9 @@ int build_tcp_packet(struct iphdr *ip_hdr, struct tcphdr *tcp_hdr, u_char *data,
     );
 
     if(check == -1){
-        printf("libnet_build_ipv4 returns error: %s\n", libnet_geterror(ctx->lnet));
+        logger(WARN, "libnet_build_ipv4 returns error: %s", libnet_geterror(ctx->lnet));
         return 0;
     }
-
-    // cull_packet will dump the packet (with correct checksums) into a
-    // buffer for us to send via the raw socket
-    if(libnet_adv_cull_packet(ctx->lnet, &pdata, &pdatalen) == -1){
-        printf("libnet_adv_cull_packet returns error: %s\n", libnet_geterror(ctx->lnet));
-        return 0;
-    }
-    libnet_adv_free_packet(ctx->lnet, pdata);
 
     return 1;
 }
@@ -285,6 +290,8 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx, lorc
     u_char *udp_data;
     int udp_datalen;
     
+    struct matcher_entry *matcher;
+
     /* Calculate the size of the IP Header. ip_hdr->ihl contains the number of 32 bit
     words that represent the header size. Therfore to get the number of bytes
     multiple this number by 4 */
@@ -322,11 +329,22 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx, lorc
                 logger(DBG, "TCP datalen <= 0, ignoring it");
                 break;
             } 
-
             tcp_data = (u_char*) tcp_hdr + tcp_hdr->doff * 4;
-            if(get_tcp_response(tcp_data, tcp_datalen, ctx)) {
+            if((matcher = get_tcp_response(tcp_data, tcp_datalen, ctx))) {
 
-      
+                u_char *pdata;
+                u_int pdatalen;
+                // cull_packet will dump the packet (with correct checksums) into a
+                // buffer for us to send via the raw socket
+                if(libnet_adv_cull_packet(ctx->lnet, &pdata, &pdatalen) == -1){
+                    logger(WARN, "libnet_adv_cull_packet returns error: %s", libnet_geterror(ctx->lnet));
+                    break;
+                }
+
+                hexdump(pdata, pdatalen);
+
+                libnet_adv_free_packet(ctx->lnet, pdata);
+
             }
             break;
         case IPPROTO_UDP:
@@ -351,7 +369,7 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx, lorc
 }
 
 
-lorcon_packet_t *build_wlan_packet(u_char *l2data, int l2datalen, lorcon_packet_t *packet) {
+lorcon_packet_t *build_wlan_packet(u_char *l2data, int l2datalen, lorcon_packet_t *packet, struct ctx *ctx) {
 
     lorcon_packet_t *n_pack;
     u_char mac0[6];
@@ -399,11 +417,10 @@ lorcon_packet_t *build_wlan_packet(u_char *l2data, int l2datalen, lorcon_packet_
 
     n_pack->lcpa = lcpa_append_copy(n_pack->lcpa, "DATA", l2datalen, l2data);
     
-    /*
     if (lorcon_inject(ctx->context_inj, n_pack) < 0) {
         printf("FFF\n");    
     }
-    */
+
     // remember to free packet TODO
     return n_pack;
 
@@ -426,7 +443,6 @@ void process_wlan_packet(lorcon_packet_t *packet, struct ctx *ctx) {
     } 
 
     i_hdr = (struct lorcon_dot11_extra *) packet->extra_info;
-
     if(i_hdr->type == WLAN_FC_TYPE_DATA) { // data frames
             
             logger(DBG, "IEEE802.11 data, type:%d subtype:%d direction:%s protected:%c src_mac:[%02X:%02X:%02X:%02X:%02X:%02X] dst_mac:[%02X:%02X:%02X:%02X:%02X:%02X] bssid_mac:[%02X:%02X:%02X:%02X:%02X:%02X]", 
