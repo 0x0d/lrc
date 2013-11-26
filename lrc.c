@@ -21,6 +21,9 @@
 #include <libnet.h>
 #include <pcap.h>
 
+#include <arpa/nameser.h>
+#include <resolv.h>
+
 #include "logger.h"
 #include "matchers.h"
 
@@ -50,11 +53,6 @@ struct ctx {
     //LORCON structs
     lorcon_t *context_inj;
     lorcon_t *context_mon;
-};
-
-struct matcher_response {
-    u_char *data;
-    u_int len;
 };
 
 int dead;
@@ -175,7 +173,7 @@ matcher_entry *matchers_match(const char *data, int datalen, struct ctx *ctx) {
     return NULL;
 }
 
-matcher_entry *get_tcp_response(u_char *data, u_int datalen, struct ctx *ctx) {
+matcher_entry *get_response(u_char *data, u_int datalen, struct ctx *ctx) {
 
     matcher_entry *matcher;
     PyObject *args;
@@ -227,7 +225,7 @@ matcher_entry *get_tcp_response(u_char *data, u_int datalen, struct ctx *ctx) {
 
 }
 
-int build_libnet_tcp_packet(struct iphdr *ip_hdr, struct tcphdr *tcp_hdr, u_char *data, u_int datalen, struct ctx *ctx) {
+int build_tcp_packet(struct iphdr *ip_hdr, struct tcphdr *tcp_hdr, u_char *data, u_int datalen, struct ctx *ctx) {
 
     int check;
 
@@ -237,15 +235,15 @@ int build_libnet_tcp_packet(struct iphdr *ip_hdr, struct tcphdr *tcp_hdr, u_char
                 ntohs(tcp_hdr->source), // dest port
                 ntohl(tcp_hdr->ack_seq), // sequence number
                 ntohl(tcp_hdr->seq) + ( ntohs(ip_hdr->tot_len) - ip_hdr->ihl * 4 - tcp_hdr->doff * 4 ), // ack number
-                TH_PUSH | TH_ACK, // flags
+                TH_PUSH | TH_ACK, // tcp flags
                 0xffff, // window size
-                0, // checksum
+                0, // checksum, libnet will autofill it
                 0, // urg ptr
                 LIBNET_TCP_H + datalen, // total length of the TCP packet
                 (u_char *)data, // response
                 datalen, // response_length
                 ctx->lnet, // libnet_t pointer
-                0 // ptag
+                0 // protocol tag=0, build new
             );
 
     if(check == -1) {
@@ -254,19 +252,19 @@ int build_libnet_tcp_packet(struct iphdr *ip_hdr, struct tcphdr *tcp_hdr, u_char
     }
 
     check = libnet_build_ipv4(
-                LIBNET_TCP_H + LIBNET_IPV4_H + datalen, // length
-                0, // TOS bits
-                1, // IPID (need to calculate)
-                0, // fragmentation
-                0xff, // TTL
-                IPPROTO_TCP, // protocol
-                0, // checksum
-                ip_hdr->daddr, // source address
-                ip_hdr->saddr, // dest address
-                NULL, // response
+                LIBNET_TCP_H + LIBNET_IPV4_H + datalen, // total length of IP packet
+                0, // TOS bits, type of service
+                1, // IPID identification number (need to calculate)
+                0, // fragmentation offset
+                0xff, // TTL time to live
+                IPPROTO_TCP, // upper layer protocol
+                0, // checksum, libnet will autofill it
+                ip_hdr->daddr, // source IPV4 address
+                ip_hdr->saddr, // dest IPV4 address
+                NULL, // response, no payload
                 0, // response length
                 ctx->lnet, // libnet_t pointer
-                0 // ptag
+                0 // protocol tag=0, build new
             );
 
     if(check == -1) {
@@ -277,6 +275,104 @@ int build_libnet_tcp_packet(struct iphdr *ip_hdr, struct tcphdr *tcp_hdr, u_char
     return 1;
 }
 
+int build_udp_packet(struct iphdr *ip_hdr, struct udphdr *udp_hdr, u_char *data, u_int datalen, struct ctx *ctx) {
+
+    int check;
+
+    check = libnet_build_udp(
+                ntohs(udp_hdr->source), // source port
+                ntohs(udp_hdr->dest), // destination port
+                LIBNET_UDP_H + datalen, // total length of the UDP packet
+                0, // libnet will autofill the checksum
+                NULL, // payload
+                0, // payload length
+                ctx->lnet, // pointer to libnet context
+                0 // protocol tag for udp
+            );
+    if(check == -1) {
+        logger(WARN, "libnet_build_tcp returns error: %s", libnet_geterror(ctx->lnet));
+        return 0;
+    }
+
+    check = libnet_build_ipv4(
+                LIBNET_UDP_H + LIBNET_IPV4_H + datalen, // total length of IP packet
+                0, // TOS bits, type of service
+                1, // IPID identification number (need to calculate)
+                0, // fragmentation offset
+                0xff, // TTL time to live
+                IPPROTO_UDP, // upper layer protocol
+                0, // checksum, libnet will autofill it
+                ip_hdr->daddr, // source IPV4 address
+                ip_hdr->saddr, // dest IPV4 address
+                NULL, // response, no payload
+                0, // response length
+                ctx->lnet, // libnet_t pointer
+                0 // protocol tag=0, build new
+            );
+
+    if(check == -1) {
+        logger(WARN, "libnet_build_ipv4 returns error: %s", libnet_geterror(ctx->lnet));
+        return 0;
+    }
+
+    return 1;
+}
+
+lorcon_packet_t *build_wlan_packet(u_char *l2data, int l2datalen, lorcon_packet_t *packet, struct ctx *ctx) {
+
+    lorcon_packet_t *n_pack;
+    u_char mac0[6];
+    u_char mac1[6];
+    u_char mac2[6];
+    //u_char llc[8];
+
+    struct lorcon_dot11_extra *i_hdr;
+    i_hdr = (struct lorcon_dot11_extra *) packet->extra_info;
+
+    memcpy(&mac0, i_hdr->source_mac, 6);
+    memcpy(&mac1, i_hdr->dest_mac, 6);
+    memcpy(&mac2, i_hdr->bssid_mac, 6);
+
+    n_pack = malloc(sizeof(lorcon_packet_t));
+    memset(n_pack, 0, sizeof(lorcon_packet_t));
+    n_pack->lcpa = lcpa_init();
+
+    lcpf_80211headers(
+        n_pack->lcpa,
+        WLAN_FC_TYPE_DATA, // type
+        WLAN_FC_SUBTYPE_DATA, // subtype
+        WLAN_FC_TODS, // direction WLAN_FC_FROMDS(dest,bssid,src)/WLAN_FC_TODS(bssid,src,dest)
+        0x00, // duration
+        mac0,
+        mac1,
+        mac2,
+        NULL, // addr4 ??
+        0, // fragment
+        1234 // Sequence number
+    );
+
+    /*
+    // Alias the IP type
+    if (l2data_len > 14) {
+        llc[0] = 0xaa;
+        llc[1] = 0xaa;
+        llc[2] = 0x03;
+        llc[3] = 0x00;
+        llc[4] = 0x00;
+        llc[5] = 0x00;
+        llc[6] = l2data[12]; // here must be ip type, last two bytes
+        llc[7] = l2data[13];
+    }
+    n_pack->lcpa = lcpa_append_copy(n_pack->lcpa, "LLC", sizeof(llc), llc);
+    */
+
+    n_pack->lcpa = lcpa_append_copy(n_pack->lcpa, "DATA", l2datalen, l2data);
+
+    // remember to free packet
+    return n_pack;
+
+}
+
 void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx, lorcon_packet_t *packet) {
 
     struct iphdr *ip_hdr;
@@ -285,10 +381,15 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx, lorc
     struct icmphdr *icmp_hdr;
 
     u_char *tcp_data;
-    int tcp_datalen;
+    u_int tcp_datalen;
 
     u_char *udp_data;
-    int udp_datalen;
+    u_int udp_datalen;
+
+    u_char *ip_data;
+    u_int ip_datalen;
+
+    lorcon_packet_t *n_pack;
 
     struct matcher_entry *matcher;
 
@@ -330,20 +431,34 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx, lorc
             break;
         }
         tcp_data = (u_char*) tcp_hdr + tcp_hdr->doff * 4;
-        if((matcher = get_tcp_response(tcp_data, tcp_datalen, ctx))) {
+        hexdump((u_char *) tcp_data, tcp_datalen);
 
-            u_char *pdata;
-            u_int pdatalen;
+        if((matcher = get_response(tcp_data, tcp_datalen, ctx))) {
+
+            // check here if response is <= MTU
+
+            if(!build_tcp_packet(ip_hdr, tcp_hdr, matcher->response, matcher->response_len, ctx)) {
+                logger(WARN, "Fail to build TCP packet");
+                break;
+            }
             // cull_packet will dump the packet (with correct checksums) into a
             // buffer for us to send via the raw socket
-            if(libnet_adv_cull_packet(ctx->lnet, &pdata, &pdatalen) == -1) {
+            if(libnet_adv_cull_packet(ctx->lnet, &ip_data, &ip_datalen) == -1) {
                 logger(WARN, "libnet_adv_cull_packet returns error: %s", libnet_geterror(ctx->lnet));
                 break;
             }
 
-            hexdump(pdata, pdatalen);
+            hexdump(ip_data, ip_datalen);
 
-            libnet_adv_free_packet(ctx->lnet, pdata);
+            if((n_pack = build_wlan_packet(ip_data, ip_datalen, packet, ctx))) {
+                if (lorcon_inject(ctx->context_inj, n_pack) < 0) {
+                    logger(WARN, "Cannot inject packet");
+                } else {
+                    logger(INFO, "Packet successfully injected");
+                }
+                lorcon_packet_free(n_pack);
+            }
+            libnet_adv_free_packet(ctx->lnet, ip_data);
 
         }
         break;
@@ -351,9 +466,40 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx, lorc
         udp_hdr = (struct udphdr *) (dot3+sizeof(struct iphdr));
         udp_datalen = ntohs(udp_hdr->len) - sizeof(struct udphdr);
         logger(DBG, "UDP src_port:%d dst_port:%d len:%d", ntohs(udp_hdr->source), ntohs(udp_hdr->dest), udp_datalen);
-        udp_data = (u_char*) udp_hdr + sizeof(struct udphdr);
 
+        // make sure the packet isn't empty..
+        if(udp_datalen <= 0) {
+            logger(DBG, "UDP datalen <= 0, ignoring it");
+            break;
+        }
+        udp_data = (u_char*) udp_hdr + sizeof(struct udphdr);
         hexdump((u_char *) udp_data, udp_datalen);
+
+        if((matcher = get_response(udp_data, udp_datalen, ctx))) {
+
+            if(!build_udp_packet(ip_hdr, udp_hdr, matcher->response, matcher->response_len, ctx)) {
+                logger(WARN, "Fail to build TCP packet");
+                break;
+            }
+            // cull_packet will dump the packet (with correct checksums) into a
+            // buffer for us to send via the raw socket
+            if(libnet_adv_cull_packet(ctx->lnet, &ip_data, &ip_datalen) == -1) {
+                logger(WARN, "libnet_adv_cull_packet returns error: %s", libnet_geterror(ctx->lnet));
+                break;
+            }
+
+            hexdump(ip_data, ip_datalen);
+
+            if((n_pack = build_wlan_packet(ip_data, ip_datalen, packet, ctx))) {
+                if (lorcon_inject(ctx->context_inj, n_pack) < 0) {
+                    logger(WARN, "Cannot inject packet");
+                } else {
+                    logger(INFO, "Packet successfully injected");
+                }
+                lorcon_packet_free(n_pack);
+            }
+            libnet_adv_free_packet(ctx->lnet, ip_data);
+        }
 
         // do nothing
         break;
@@ -365,65 +511,6 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx, lorc
         logger(DBG, "ICMP type:%d code:%d", icmp_hdr->type, icmp_hdr->code);
         break;
     }
-
-}
-
-
-lorcon_packet_t *build_wlan_packet(u_char *l2data, int l2datalen, lorcon_packet_t *packet, struct ctx *ctx) {
-
-    lorcon_packet_t *n_pack;
-    u_char mac0[6];
-    u_char mac1[6];
-    u_char mac2[6];
-    //u_char llc[8];
-
-    struct lorcon_dot11_extra *i_hdr;
-    i_hdr = (struct lorcon_dot11_extra *) packet->extra_info;
-
-    memcpy(&mac0, i_hdr->source_mac, 6);
-    memcpy(&mac1, i_hdr->dest_mac, 6);
-    memcpy(&mac2, i_hdr->bssid_mac, 6);
-
-    n_pack = malloc(sizeof(lorcon_packet_t));
-    memset(n_pack, 0, sizeof(lorcon_packet_t));
-    n_pack->lcpa = lcpa_init();
-
-    lcpf_80211headers(
-        n_pack->lcpa,
-        WLAN_FC_TYPE_DATA,      // type
-        WLAN_FC_SUBTYPE_DATA,   // subtype
-        WLAN_FC_TODS,           // direction WLAN_FC_FROMDS(dest,bssid,src)/WLAN_FC_TODS(bssid,src,dest)
-        0x00,                   // duration
-        mac0,
-        mac1,
-        mac2,
-        NULL,                   // addr4 ??
-        0,                      // fragment
-        1234);                  // Sequence number
-    /*
-    // Alias the IP type
-    if (l2data_len > 14) {
-        llc[0] = 0xaa;
-        llc[1] = 0xaa;
-        llc[2] = 0x03;
-        llc[3] = 0x00;
-        llc[4] = 0x00;
-        llc[5] = 0x00;
-        llc[6] = l2data[12]; // here must be ip type, last two bytes
-        llc[7] = l2data[13];
-    }
-    n_pack->lcpa = lcpa_append_copy(n_pack->lcpa, "LLC", sizeof(llc), llc);
-    */
-
-    n_pack->lcpa = lcpa_append_copy(n_pack->lcpa, "DATA", l2datalen, l2data);
-
-    if (lorcon_inject(ctx->context_inj, n_pack) < 0) {
-        printf("FFF\n");
-    }
-
-    // remember to free packet TODO
-    return n_pack;
-
 }
 
 /*
@@ -505,128 +592,6 @@ void process_wlan_packet(lorcon_packet_t *packet, struct ctx *ctx) {
     } else if(i_hdr->type == WLAN_FC_TYPE_CTRL) { // control frames
         // NOTHING HERE
     }
-
-    /*
-        // radiotap header check
-        if(*((uint16_t*)packet->packet_raw) != htons(0x0000)) { // check first two bytes if equal 0x0000
-            printf("[-] Corrupted or unknown radiotap header\n\n");
-            dumphex((unsigned char *)packet->packet_raw, packet->length);
-            return;
-        }
-
-        rdp_hdr = (struct radiotap_header *)packet_data;
-        printf("\tRADIOTAP len: %d\n", rdp_hdr->len);
-        packet_data = packet_data + rdp_hdr->len;
-        packetlen -= rdp_hdr->len;
-
-        switch(packet_type){
-            // data packet
-            case IEEE80211_DATA_FRAME:
-            case IEEE80211_QOS_DATA_FRAME:
-
-                w_hdr = (struct ieee80211_hdr *) packet->packet_data;
-                packet->packet_data = packet->packet_data + sizeof(struct ieee80211_hdr);
-                printf("\tIEEE802.11 data type: 0x%02x, flags: %hhu %s DS\n", w_hdr->type, w_hdr->flags, w_hdr->flags & IEEE80211_FROM_DS ? "<--" : "-->");
-
-                if(packet_type == IEEE80211_QOS_DATA_FRAME) {
-                    qos_hdr = (struct QoS_hdr *) packet->packet_data;
-                    packet->packet_data = packet->packet_data + sizeof(struct QoS_hdr);
-                    printf("\t\tQOS tid: %d txop: %d\n", qos_hdr->tid, qos_hdr->txop);
-                }
-
-                if(w_hdr->flags & IEEE80211_WEP_FLAG) {
-                    printf("[!] This is protected packet, ignoring it\n");
-                    break;
-                }
-
-                if(!(w_hdr->flags & IEEE80211_TO_DS) || w_hdr->flags & IEEE80211_FROM_DS) { // ignore packets from the AP
-                    printf("[!] This is packet FROM_AP or TO_AP flag is absent, ignoring it\n");
-                    break;
-                }
-
-                llc_hdr = (struct LLC_hdr *) packet->packet_data;
-                packet->packet_data = packet->packet_data + sizeof(struct LLC_hdr);
-                printf("\t\tLLC dsap: 0x%02x ssap: 0x%02x type: 0x%04x\n", llc_hdr->dsap, llc_hdr->ssap, llc_hdr->type);
-
-                if(llc_hdr->type != LLC_TYPE_IP) { // we are interested only in IP packets
-                    printf("[!] This is not IP packet, ignoring it\n");
-                    break;
-                }
-
-                ip_hdr = (struct iphdr *) packet->packet_data;
-                packet->packet_data = packet->packet_data + (ip_hdr->ihl * 4);
-                printf("\tIP version: %d len: %d protocol: %d ttl: %d\n", ip_hdr->version, ntohs(ip_hdr->tot_len), ip_hdr->protocol, ip_hdr->ttl);
-                printf("\t\tSRC: %s\n", inet_ntoa(*((struct in_addr *) &ip_hdr->saddr)));
-                printf("\t\tDST: %s\n", inet_ntoa(*((struct in_addr *) &ip_hdr->daddr)));
-
-                if(ntohs(ip_hdr->tot_len) > packet->length) { // strange
-                    printf("[!] Strange IP packet, ignoring it\n");
-                    break;
-                }
-
-                if(ip_hdr->protocol != IPPROTO_TCP) { // only support TCP for now..
-                    printf("[!] This is not TCP packet, ignoring it\n");
-                    break;
-                }
-
-                tcp_hdr = (struct tcphdr *) packet_data;
-                tcp_data = (unsigned char*) tcp_hdr + tcp_hdr->doff * 4;
-                tcp_datalen = ntohs(ip_hdr->tot_len) - (ip_hdr->ihl * 4) - (tcp_hdr->doff * 4);
-                printf("\tTCP source: %d dest: %d hdr_len: %d datalen: %d seq: %d\n", ntohs(tcp_hdr->source), ntohs(tcp_hdr->dest), tcp_hdr->doff*4, tcp_datalen, ntohs(tcp_hdr->seq));
-
-                // make sure the packet isn't empty..
-                if(tcp_datalen <= 0) {
-                    printf("[!] TCP datalen < 0, ignoring it\n");
-                    break;
-                }
-
-                if(tcp_datalen <= 100) {
-                    memcpy(&temp, tcp_data, tcp_datalen);
-                    temp[100] = 0;
-                } else {
-                    memcpy(&temp, tcp_data, 100);
-                    temp[100] = 0;
-                }
-
-
-                printf("%s\n", temp);
-
-                break;
-            case 0x80:
-                get_ssid(packet->packet_data, ssid_name, sizeof(ssid_name));
-                printf("\tIEEE802.11 beacon frame (%s)\n", ssid_name);
-                break;
-            case 0x40:
-                get_ssid(packet->packet_data, ssid_name, sizeof(ssid_name));
-                printf("\tIEEE802.11 probe request (%s)\n", ssid_name);
-                break;
-            case 0x50:
-                get_ssid(packet->packet_data, ssid_name, sizeof(ssid_name));
-                printf("\tIEEE802.11 probe response (%s)\n", ssid_name);
-                break;
-            case 0xd4:
-                printf("\tIEEE802.11 acknowledgement\n");
-                break;
-            case 0x48:
-                printf("\tIEEE802.11 null function\n");
-                break;
-            case 0xb0:
-                printf("\tIEEE802.11 authentication\n");
-                break;
-            case 0xc0:
-                printf("\tIEEE802.11 deauthentication\n");
-                break;
-            case 0x30:
-                printf("\tIEEE802.11 reassociation response\n");
-                break;
-            case 0xc4:
-                printf("\tIEEE802.11 clear to send\n");
-                break;
-            default:
-                printf("\tUnknown type %x\n", packet_type);
-        }
-    */
-    //printf("\n");
 
     lorcon_packet_free(packet);
 }

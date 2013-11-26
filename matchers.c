@@ -114,6 +114,15 @@ struct matcher_entry *parse_matchers_file(char *matcher_file_path) {
                     printf("Unknown option: %s\n", argument);
                     return NULL;
                 }
+            } else if(strcmp(command, "type") == 0) {
+                if(strcmp(argument, "tcp") == 0) {
+                    head->type = MATCHER_TCP;
+                } else if(strcmp(argument, "udp") == 0) {
+                    head->type = MATCHER_UDP;
+                } else {
+                    printf("Unknown type: %s\n", argument);
+                    return NULL;
+                }
             } else if(strcmp(command, "response") == 0) {
                 // path to the file to load the response from
                 if((fd = open(argument, O_RDONLY)) < 0) {
