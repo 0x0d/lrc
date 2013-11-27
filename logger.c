@@ -31,16 +31,21 @@ int logger_init(const char *filename) {
 void logger(int type, const char *fmt, ...) {
 
     va_list ap;
-    time_t now;
-    struct tm *current;
+    char tfmt[64], tbuf[64];
 
-    time(&now);
-    current = localtime(&now);
+    struct tm *tm;
+    struct timeval tv;
+
 
     if(type == DBG && !debugged) {
         return;
     }
 
+    gettimeofday(&tv, NULL);
+    if((tm = localtime(&tv.tv_sec)) != NULL) {
+        strftime(tfmt, sizeof tfmt, "%Y-%m-%d %H:%M:%S.%%06u %z", tm);
+        snprintf(tbuf, sizeof tbuf, tfmt, tv.tv_usec);
+    }
     va_start(ap, fmt);
     switch(type) {
     case WARN:
@@ -50,7 +55,7 @@ void logger(int type, const char *fmt, ...) {
         (void)fprintf(logfd, "[-] ");
         break;
     }
-    (void)fprintf(logfd, "[%04d/%02d/%02d %02d:%02d:%02d] ",current->tm_year+1900, current->tm_mon+1, current->tm_mday, current->tm_hour, current->tm_min, current->tm_sec);
+    (void)fprintf(logfd, "[%s] ", tbuf);
     if (fmt != NULL) {
         (void)vfprintf(logfd, fmt, ap);
     }

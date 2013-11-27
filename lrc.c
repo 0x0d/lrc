@@ -166,9 +166,9 @@ matcher_entry *matchers_match(const char *data, int datalen, struct ctx *ctx) {
 
     for(matcher = ctx->matchers_list; matcher != NULL; matcher = matcher->next) {
         if(pcre_exec(matcher->match, NULL, data, datalen,  0, 0, ovector, 30) > 0) {
-            logger(DBG, "Matched pattern for conf '%s'", matcher->name);
+            logger(INFO, "Matched pattern for '%s'", matcher->name);
             if(pcre_exec(matcher->ignore, NULL, data, datalen, 0, 0, ovector, 30) > 0) {
-                logger(DBG, "Matched ignore for conf '%s'", matcher->name);
+                logger(INFO, "Matched ignore for '%s'", matcher->name);
             } else {
                 return matcher;
             }
@@ -192,8 +192,9 @@ matcher_entry *get_response(u_char *data, u_int datalen, struct ctx *ctx) {
 
     if(matcher->pyfunc) {
         logger(DBG, "We have a Python code to construct response");
-        args = PyTuple_New(1);
+        args = PyTuple_New(2);
         PyTuple_SetItem(args,0,PyString_FromStringAndSize((const char *)data, datalen)); // here is data
+        PyTuple_SetItem(args,1,PyInt_FromSsize_t(datalen));
 
         value = PyObject_CallObject(matcher->pyfunc, args);
         if(value == NULL) {
@@ -397,6 +398,9 @@ int lorcon_send_packet(lorcon_packet_t *packet, struct ctx *ctx) {
     }
 
     if((n_pack = build_wlan_packet(ip_data, ip_datalen, packet, ctx))) {
+
+        hexdump(ip_data, ip_datalen);
+
         if (lorcon_inject(ctx->context_inj, n_pack) < 0) {
             lorcon_packet_free(n_pack);
             return 0;
@@ -467,11 +471,11 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx, lorc
             break;
         }
         tcp_data = (u_char*) tcp_hdr + tcp_hdr->doff * 4;
-        tcpseqnum = ntohl(tcp_hdr->ack_seq);
-        //hexdump((u_char *) tcp_data, tcp_datalen);
-        
-        if((matcher = get_response(tcp_data, tcp_datalen, ctx))) {
 
+        if((matcher = get_response(tcp_data, tcp_datalen, ctx))) {
+            logger(INFO, "Matched TCP packet %s:%d -> %s:%d len:%d", inet_ntoa(*((struct in_addr *) &ip_hdr->saddr)), ntohs(tcp_hdr->source), inet_ntoa(*((struct in_addr *) &ip_hdr->daddr)), ntohs(tcp_hdr->dest),tcp_datalen);
+
+            tcpseqnum = ntohl(tcp_hdr->ack_seq);
             for(frag_offset = 0; frag_offset < matcher->response_len; frag_offset += ctx->mtu) {
 
                 frag_len = matcher->response_len - frag_offset;
@@ -479,22 +483,20 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx, lorc
                     frag_len = ctx->mtu;
                 }
 
-                tcpseqnum = tcpseqnum + frag_offset;
                 if((frag_offset + ctx->mtu) > matcher->response_len) {
                     tcpflags = TH_PUSH | TH_ACK;
                 } else {
                     tcpflags = TH_ACK;
                 }
 
-                logger(DBG, "Fragments frag_len: %d, frag_offset: %d, response_len: %d", frag_len, frag_offset, matcher->response_len);
-
                 if(!build_tcp_packet(ip_hdr, tcp_hdr, matcher->response + frag_offset, frag_len, tcpflags, tcpseqnum, ctx)) {
                     logger(WARN, "Fail to build TCP packet");
                     break;
                 }
+                tcpseqnum = tcpseqnum + frag_len;
 
                 if(lorcon_send_packet(packet, ctx)) {
-                    logger(INFO, "TCP packet successfully injected");
+                    logger(INFO, "TCP packet successfully injected. frag_len: %d, frag_offset: %d, response_len: %d", frag_len, frag_offset, matcher->response_len);
                 } else {
                     logger(WARN, "Cannot inject TCP packet");
                 }
@@ -526,9 +528,9 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx, lorc
             break;
         }
         udp_data = (u_char*) udp_hdr + sizeof(struct udphdr);
-        //hexdump((u_char *) udp_data, udp_datalen);
 
         if((matcher = get_response(udp_data, udp_datalen, ctx))) {
+            logger(INFO, "Matched UDP packet %s:%d -> %s:%d len:%d", inet_ntoa(*((struct in_addr *) &ip_hdr->saddr)), ntohs(udp_hdr->source), inet_ntoa(*((struct in_addr *) &ip_hdr->daddr)), ntohs(udp_hdr->dest), udp_datalen);
 
             for(frag_offset = 0; frag_offset < matcher->response_len; frag_offset += ctx->mtu) {
 
@@ -542,7 +544,7 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx, lorc
                     break;
                 }
                 if(lorcon_send_packet(packet, ctx)) {
-                    logger(INFO, "UDP packet successfully injected");
+                    logger(INFO, "UDP packet successfully injected. frag_len: %d, frag_offset: %d, response_len: %d", frag_len, frag_offset, matcher->response_len);
                 } else {
                     logger(WARN, "Cannot inject UDP packet");
                 }
