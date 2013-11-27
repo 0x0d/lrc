@@ -64,6 +64,7 @@ struct matcher_entry *parse_matchers_file(char *matcher_file_path) {
                 return NULL;
             }
 
+            // need to zero this struct
             bzero(tmp, sizeof(struct matcher_entry));
 
             // now's a good time to make sure the previous block had
@@ -74,9 +75,22 @@ struct matcher_entry *parse_matchers_file(char *matcher_file_path) {
                     return NULL;
                 }
 
-                if(head->response == NULL || head->response_len < 1 || head->response_len > MATCHER_MAX_RESPONSE) {
-                    //if((head->response == NULL && head->pyfunc == NULL) || head->response_len < 1 || head->response_len > MATCHER_MAX_RESPONSE) {
-                    printf("Error: block ending at line %u has missing or malformed response!\n", line_no);
+                if((head->response == NULL || head->response_len < 1 || head->response_len > MATCHER_MAX_RESPONSE) && head->pyfunc == NULL) {
+                    printf("Error: block ending at line %u has missing or malformed response/pymodule!\n", line_no);
+                    return NULL;
+                }
+
+                if(!head->type) {
+                    printf("Error: block ending at line %u has missing type\n", line_no);
+                    return NULL;
+                }
+
+                if(head->dst_port >= 65535) {
+                    printf("Error: block ending at line %u has incorrect dst port\n", line_no);
+                    return NULL;
+                }
+                if(head->src_port >= 65535) {
+                    printf("Error: block ending at line %u has incorrect src port\n", line_no);
                     return NULL;
                 }
             }
@@ -114,6 +128,19 @@ struct matcher_entry *parse_matchers_file(char *matcher_file_path) {
                     printf("Unknown option: %s\n", argument);
                     return NULL;
                 }
+            } else if(strcmp(command, "type") == 0) {
+                if(strcmp(argument, "tcp") == 0) {
+                    head->type = MATCHER_TYPE_TCP;
+                } else if(strcmp(argument, "udp") == 0) {
+                    head->type = MATCHER_TYPE_UDP;
+                } else {
+                    printf("Unknown type: %s\n", argument);
+                    return NULL;
+                }
+            } else if(strcmp(command, "dst_port") == 0) {
+                head->dst_port = atoi(argument);
+            } else if(strcmp(command, "src_port") == 0) {
+                head->src_port = atoi(argument);
             } else if(strcmp(command, "response") == 0) {
                 // path to the file to load the response from
                 if((fd = open(argument, O_RDONLY)) < 0) {

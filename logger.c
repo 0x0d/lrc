@@ -36,7 +36,6 @@ void logger(int type, const char *fmt, ...) {
     struct tm *tm;
     struct timeval tv;
 
-
     if(type == DBG && !debugged) {
         return;
     }

@@ -45,6 +45,11 @@ struct ctx {
     u_int channel_fix;
 
     libnet_t *lnet;
+    libnet_ptag_t p_tcp;
+    libnet_ptag_t p_udp;
+    libnet_ptag_t p_ip;
+
+    lorcon_packet_t *n_pack;
 
     u_int mtu;
 
@@ -160,15 +165,22 @@ int get_ssid(const u_char *packet_data, char *ssid_name, u_short max_name_len) {
     return -1;
 }
 
-matcher_entry *matchers_match(const char *data, int datalen, struct ctx *ctx) {
+matcher_entry *matchers_match(const char *data, int datalen, struct ctx *ctx, u_int type, u_int src_port, u_int dst_port) {
     matcher_entry *matcher;
     int ovector[30];
 
     for(matcher = ctx->matchers_list; matcher != NULL; matcher = matcher->next) {
+        if(matcher->type != MATCHER_TYPE_ANY && matcher->type != type) {
+            continue;
+        }
+        if((matcher->dst_port > 0 && matcher->dst_port != dst_port) || (matcher->src_port > 0 && matcher->src_port != src_port)) {
+            continue;
+        }
         if(pcre_exec(matcher->match, NULL, data, datalen,  0, 0, ovector, 30) > 0) {
             logger(INFO, "Matched pattern for '%s'", matcher->name);
-            if(pcre_exec(matcher->ignore, NULL, data, datalen, 0, 0, ovector, 30) > 0) {
+            if(matcher->ignore && pcre_exec(matcher->ignore, NULL, data, datalen, 0, 0, ovector, 30) > 0) {
                 logger(INFO, "Matched ignore for '%s'", matcher->name);
+                continue;
             } else {
                 return matcher;
             }
@@ -177,7 +189,7 @@ matcher_entry *matchers_match(const char *data, int datalen, struct ctx *ctx) {
     return NULL;
 }
 
-matcher_entry *get_response(u_char *data, u_int datalen, struct ctx *ctx) {
+matcher_entry *get_response(u_char *data, u_int datalen, struct ctx *ctx, u_int type, u_int src_port, u_int dst_port) {
 
     matcher_entry *matcher;
     PyObject *args;
@@ -185,7 +197,7 @@ matcher_entry *get_response(u_char *data, u_int datalen, struct ctx *ctx) {
     Py_ssize_t rdatalen;
     char *rdata;
 
-    if(!(matcher = matchers_match((const char *)data, datalen, ctx))) {
+    if(!(matcher = matchers_match((const char *)data, datalen, ctx, type, src_port, dst_port))) {
         logger(DBG, "No matchers found for data");
         return NULL;
     }
@@ -220,9 +232,7 @@ matcher_entry *get_response(u_char *data, u_int datalen, struct ctx *ctx) {
             return NULL;
         }
         return matcher;
-    }
-
-    if(matcher->response) {
+    } else if(matcher->response) {
         logger(DBG, "We have a plain text response");
         return matcher;
     }
@@ -234,13 +244,8 @@ matcher_entry *get_response(u_char *data, u_int datalen, struct ctx *ctx) {
 
 int build_tcp_packet(struct iphdr *ip_hdr, struct tcphdr *tcp_hdr, u_char *data, u_int datalen, u_int tcpflags, u_int seqnum, struct ctx *ctx) {
 
-    int check;
-
-    // clear previous use
-    libnet_clear_packet(ctx->lnet);
-
     // libnet wants the data in host-byte-order
-    check = libnet_build_tcp(
+    ctx->p_tcp = libnet_build_tcp(
                 ntohs(tcp_hdr->dest), // source port
                 ntohs(tcp_hdr->source), // dest port
                 seqnum, // sequence number
@@ -253,15 +258,15 @@ int build_tcp_packet(struct iphdr *ip_hdr, struct tcphdr *tcp_hdr, u_char *data,
                 (u_char *)data, // response
                 datalen, // response_length
                 ctx->lnet, // libnet_t pointer
-                0 // protocol tag=0, build new
+                ctx->p_tcp // protocol tag
             );
 
-    if(check == -1) {
+    if(ctx->p_tcp == -1) {
         logger(WARN, "libnet_build_tcp returns error: %s", libnet_geterror(ctx->lnet));
         return 0;
     }
 
-    check = libnet_build_ipv4(
+    ctx->p_ip = libnet_build_ipv4(
                 LIBNET_TCP_H + LIBNET_IPV4_H + datalen, // total length of IP packet
                 0, // TOS bits, type of service
                 1, // IPID identification number (need to calculate)
@@ -274,10 +279,10 @@ int build_tcp_packet(struct iphdr *ip_hdr, struct tcphdr *tcp_hdr, u_char *data,
                 NULL, // response, no payload
                 0, // response length
                 ctx->lnet, // libnet_t pointer
-                0 // protocol tag=0, build new
+                ctx->p_ip // protocol tag
             );
 
-    if(check == -1) {
+    if(ctx->p_ip == -1) {
         logger(WARN, "libnet_build_ipv4 returns error: %s", libnet_geterror(ctx->lnet));
         return 0;
     }
@@ -287,12 +292,7 @@ int build_tcp_packet(struct iphdr *ip_hdr, struct tcphdr *tcp_hdr, u_char *data,
 
 int build_udp_packet(struct iphdr *ip_hdr, struct udphdr *udp_hdr, u_char *data, u_int datalen, struct ctx *ctx) {
 
-    int check;
-
-    // clear previous use
-    libnet_clear_packet(ctx->lnet);
-
-    check = libnet_build_udp(
+    ctx->p_udp = libnet_build_udp(
                 ntohs(udp_hdr->source), // source port
                 ntohs(udp_hdr->dest), // destination port
                 LIBNET_UDP_H + datalen, // total length of the UDP packet
@@ -300,14 +300,14 @@ int build_udp_packet(struct iphdr *ip_hdr, struct udphdr *udp_hdr, u_char *data,
                 NULL, // payload
                 0, // payload length
                 ctx->lnet, // pointer to libnet context
-                0 // protocol tag for udp
+                ctx->p_udp // protocol tag for udp
             );
-    if(check == -1) {
+    if(ctx->p_udp == -1) {
         logger(WARN, "libnet_build_tcp returns error: %s", libnet_geterror(ctx->lnet));
         return 0;
     }
 
-    check = libnet_build_ipv4(
+    ctx->p_ip = libnet_build_ipv4(
                 LIBNET_UDP_H + LIBNET_IPV4_H + datalen, // total length of IP packet
                 0, // TOS bits, type of service
                 1, // IPID identification number (need to calculate)
@@ -320,10 +320,10 @@ int build_udp_packet(struct iphdr *ip_hdr, struct udphdr *udp_hdr, u_char *data,
                 NULL, // response, no payload
                 0, // response length
                 ctx->lnet, // libnet_t pointer
-                0 // protocol tag=0, build new
+                ctx->p_ip // protocol tag=0, build new
             );
 
-    if(check == -1) {
+    if(ctx->p_ip == -1) {
         logger(WARN, "libnet_build_ipv4 returns error: %s", libnet_geterror(ctx->lnet));
         return 0;
     }
@@ -388,8 +388,6 @@ int lorcon_send_packet(lorcon_packet_t *packet, struct ctx *ctx) {
     u_char *ip_data;
     u_int ip_datalen;
 
-    lorcon_packet_t *n_pack;
-
     // cull_packet will dump the packet (with correct checksums) into a
     // buffer for us to send via the raw socket. memory must be freed after that
     if(libnet_adv_cull_packet(ctx->lnet, &ip_data, &ip_datalen) == -1) {
@@ -397,19 +395,35 @@ int lorcon_send_packet(lorcon_packet_t *packet, struct ctx *ctx) {
         return 0;
     }
 
-    if((n_pack = build_wlan_packet(ip_data, ip_datalen, packet, ctx))) {
+    if(ctx->n_pack) {
+        lcpa_replace_copy(ctx->n_pack->lcpa, "DATA", ip_datalen, ip_data);
+    } else {
+        ctx->n_pack = build_wlan_packet(ip_data, ip_datalen, packet, ctx);
+    }
 
-        hexdump(ip_data, ip_datalen);
+    if(ctx->n_pack) {
+        //hexdump(ip_data, ip_datalen);
 
-        if (lorcon_inject(ctx->context_inj, n_pack) < 0) {
-            lorcon_packet_free(n_pack);
+        if (lorcon_inject(ctx->context_inj, ctx->n_pack) < 0) {
             return 0;
         } 
-        lorcon_packet_free(n_pack);
     }
     libnet_adv_free_packet(ctx->lnet, ip_data);
 
     return 1;
+}
+
+void clear_packet(struct ctx *ctx) {
+    if(ctx->n_pack) {
+        lorcon_packet_free(ctx->n_pack);
+        ctx->n_pack = NULL;
+    }
+    if(ctx->lnet) {
+        libnet_clear_packet(ctx->lnet);
+        ctx->p_ip = 0;
+        ctx->p_tcp = 0;
+        ctx->p_udp = 0;
+    }
 }
 
 void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx, lorcon_packet_t *packet) {
@@ -472,7 +486,7 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx, lorc
         }
         tcp_data = (u_char*) tcp_hdr + tcp_hdr->doff * 4;
 
-        if((matcher = get_response(tcp_data, tcp_datalen, ctx))) {
+        if((matcher = get_response(tcp_data, tcp_datalen, ctx, MATCHER_TYPE_TCP, ntohs(tcp_hdr->source), ntohs(tcp_hdr->dest)))) {
             logger(INFO, "Matched TCP packet %s:%d -> %s:%d len:%d", inet_ntoa(*((struct in_addr *) &ip_hdr->saddr)), ntohs(tcp_hdr->source), inet_ntoa(*((struct in_addr *) &ip_hdr->daddr)), ntohs(tcp_hdr->dest),tcp_datalen);
 
             tcpseqnum = ntohl(tcp_hdr->ack_seq);
@@ -491,30 +505,30 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx, lorc
 
                 if(!build_tcp_packet(ip_hdr, tcp_hdr, matcher->response + frag_offset, frag_len, tcpflags, tcpseqnum, ctx)) {
                     logger(WARN, "Fail to build TCP packet");
+                    // clear packet?
                     break;
                 }
                 tcpseqnum = tcpseqnum + frag_len;
 
-                if(lorcon_send_packet(packet, ctx)) {
-                    logger(INFO, "TCP packet successfully injected. frag_len: %d, frag_offset: %d, response_len: %d", frag_len, frag_offset, matcher->response_len);
-                } else {
+                if(!lorcon_send_packet(packet, ctx)) {
                     logger(WARN, "Cannot inject TCP packet");
                 }
             }
+            logger(INFO, "TCP packet successfully injected. response_len: %d", matcher->response_len);
 
             // reset packet handling
             if(matcher->options & MATCHER_OPTION_RESET) {
-                logger(INFO, "TCP reset packet sending");
                 if(!build_tcp_packet(ip_hdr, tcp_hdr, NULL, 0, TH_RST | TH_ACK, tcpseqnum, ctx)) {
                     logger(WARN, "Fail to build TCP reset packet");
+                    // clear packet?
                     break;
                 }
-                if(lorcon_send_packet(packet, ctx)) {
-                    logger(INFO, "TCP reset packet successfully injected");
-                } else {
+                if(!lorcon_send_packet(packet, ctx)) {
                     logger(WARN, "Cannot inject TCP reset packet");
                 }
+                logger(INFO, "TCP reset packet successfully injected");
             }
+            clear_packet(ctx);
         }
         break;
     case IPPROTO_UDP:
@@ -529,7 +543,7 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx, lorc
         }
         udp_data = (u_char*) udp_hdr + sizeof(struct udphdr);
 
-        if((matcher = get_response(udp_data, udp_datalen, ctx))) {
+        if((matcher = get_response(udp_data, udp_datalen, ctx, MATCHER_TYPE_UDP, ntohs(udp_hdr->source), ntohs(udp_hdr->dest)))) {
             logger(INFO, "Matched UDP packet %s:%d -> %s:%d len:%d", inet_ntoa(*((struct in_addr *) &ip_hdr->saddr)), ntohs(udp_hdr->source), inet_ntoa(*((struct in_addr *) &ip_hdr->daddr)), ntohs(udp_hdr->dest), udp_datalen);
 
             for(frag_offset = 0; frag_offset < matcher->response_len; frag_offset += ctx->mtu) {
@@ -541,30 +555,29 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx, lorc
 
                 if(!build_udp_packet(ip_hdr, udp_hdr, matcher->response + frag_offset, frag_len, ctx)) {
                     logger(WARN, "Fail to build UDP packet");
+                    // clear packet?
                     break;
                 }
-                if(lorcon_send_packet(packet, ctx)) {
-                    logger(INFO, "UDP packet successfully injected. frag_len: %d, frag_offset: %d, response_len: %d", frag_len, frag_offset, matcher->response_len);
-                } else {
+                if(!lorcon_send_packet(packet, ctx)) {
                     logger(WARN, "Cannot inject UDP packet");
                 }
             }
+            logger(INFO, "UDP packet successfully injected. response_len: %d", matcher->response_len);
 
             // UDP "reset" packet handling, just send an empty UDP packet
             if(matcher->options & MATCHER_OPTION_RESET) {
                 logger(INFO, "UDP reset packet sending");
                 if(!build_udp_packet(ip_hdr, udp_hdr, NULL, 0, ctx)) {
                     logger(WARN, "Fail to build UDP reset packet");
+                    // clear packet?
                     break;
                 }
                 if(lorcon_send_packet(packet, ctx)) {
-                    logger(INFO, "UDP reset packet successfully injected");
-                } else {
                     logger(WARN, "Cannot inject UDP reset packet");
                 }
+                logger(INFO, "UDP reset packet successfully injected");
             }
-
-
+            clear_packet(ctx);
         }
 
         // do nothing
