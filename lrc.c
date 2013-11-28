@@ -395,6 +395,7 @@ int lorcon_send_packet(lorcon_packet_t *packet, struct ctx *ctx) {
         return 0;
     }
 
+    // if we already have this pointer then we sending a round of packets in a cycle, no need to forge all 802.11 headers.
     if(ctx->n_pack) {
         lcpa_replace_copy(ctx->n_pack->lcpa, "DATA", ip_datalen, ip_data);
     } else {
