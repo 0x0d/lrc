@@ -165,12 +165,12 @@ int get_ssid(const u_char *packet_data, char *ssid_name, u_short max_name_len) {
     return -1;
 }
 
-matcher_entry *matchers_match(const char *data, int datalen, struct ctx *ctx, u_int type, u_int src_port, u_int dst_port) {
-    matcher_entry *matcher;
+struct matcher_entry *matchers_match(const char *data, int datalen, struct ctx *ctx, u_int proto, u_int src_port, u_int dst_port) {
+    struct matcher_entry *matcher;
     int ovector[30];
 
     for(matcher = ctx->matchers_list; matcher != NULL; matcher = matcher->next) {
-        if(matcher->type != MATCHER_TYPE_ANY && matcher->type != type) {
+        if(matcher->proto != MATCHER_PROTO_ANY && matcher->proto != proto) {
             continue;
         }
         if((matcher->dst_port > 0 && matcher->dst_port != dst_port) || (matcher->src_port > 0 && matcher->src_port != src_port)) {
@@ -189,9 +189,9 @@ matcher_entry *matchers_match(const char *data, int datalen, struct ctx *ctx, u_
     return NULL;
 }
 
-matcher_entry *get_response(u_char *data, u_int datalen, struct ctx *ctx, u_int type, u_int src_port, u_int dst_port) {
+struct matcher_entry *get_response(u_char *data, u_int datalen, struct ctx *ctx, u_int type, u_int src_port, u_int dst_port) {
 
-    matcher_entry *matcher;
+    struct matcher_entry *matcher;
     PyObject *args;
     PyObject *value;
     Py_ssize_t rdatalen;
@@ -487,7 +487,7 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx, lorc
         }
         tcp_data = (u_char*) tcp_hdr + tcp_hdr->doff * 4;
 
-        if((matcher = get_response(tcp_data, tcp_datalen, ctx, MATCHER_TYPE_TCP, ntohs(tcp_hdr->source), ntohs(tcp_hdr->dest)))) {
+        if((matcher = get_response(tcp_data, tcp_datalen, ctx, MATCHER_PROTO_TCP, ntohs(tcp_hdr->source), ntohs(tcp_hdr->dest)))) {
             logger(INFO, "Matched TCP packet %s:%d -> %s:%d len:%d", inet_ntoa(*((struct in_addr *) &ip_hdr->saddr)), ntohs(tcp_hdr->source), inet_ntoa(*((struct in_addr *) &ip_hdr->daddr)), ntohs(tcp_hdr->dest),tcp_datalen);
 
             tcpseqnum = ntohl(tcp_hdr->ack_seq);
@@ -544,7 +544,7 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx, lorc
         }
         udp_data = (u_char*) udp_hdr + sizeof(struct udphdr);
 
-        if((matcher = get_response(udp_data, udp_datalen, ctx, MATCHER_TYPE_UDP, ntohs(udp_hdr->source), ntohs(udp_hdr->dest)))) {
+        if((matcher = get_response(udp_data, udp_datalen, ctx, MATCHER_PROTO_UDP, ntohs(udp_hdr->source), ntohs(udp_hdr->dest)))) {
             logger(INFO, "Matched UDP packet %s:%d -> %s:%d len:%d", inet_ntoa(*((struct in_addr *) &ip_hdr->saddr)), ntohs(udp_hdr->source), inet_ntoa(*((struct in_addr *) &ip_hdr->daddr)), ntohs(udp_hdr->dest), udp_datalen);
 
             for(frag_offset = 0; frag_offset < matcher->response_len; frag_offset += ctx->mtu) {

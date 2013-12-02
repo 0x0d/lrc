@@ -8,6 +8,39 @@
 
 #include "matchers.h"
 
+struct matcher_entry *check_block_params(struct matcher_entry *head) {
+
+    if(head->name == NULL) {
+        printf("You must specify block name\n");
+        return NULL;
+    }
+
+    if(head->match == NULL) {
+        printf("Error: block \"%s\" missing match!\n", head->name);
+        return NULL;
+    }
+
+    if((head->response == NULL || head->response_len < 1 || head->response_len > MATCHER_MAX_RESPONSE) && head->pyfunc == NULL) {
+        printf("Error: block \"%s\" has missing or malformed response/pymodule!\n", head->name);
+        return NULL;
+    }
+
+    if(!head->proto) {
+        printf("Error: block \"%s\" has missing proto\n", head->name);
+        return NULL;
+    }
+
+    if(head->dst_port >= 65535) {
+        printf("Error: block \"%s\" has incorrect dst port\n", head->name);
+        return NULL;
+    }
+    if(head->src_port >= 65535) {
+        printf("Error: block \"%s\" has incorrect src port\n", head->name);
+        return NULL;
+    }
+    return head;
+}
+
 struct matcher_entry *parse_matchers_file(char *matcher_file_path) {
 
     FILE *matcher_file;
@@ -67,38 +100,10 @@ struct matcher_entry *parse_matchers_file(char *matcher_file_path) {
             // need to zero this struct
             bzero(tmp, sizeof(struct matcher_entry));
 
-            // now's a good time to make sure the previous block had
-            // everything we care about..
-            if(head) {
-                if(head->match == NULL) {
-                    printf("Error: block ending at line %u missing match!\n", line_no);
-                    return NULL;
-                }
-
-                if((head->response == NULL || head->response_len < 1 || head->response_len > MATCHER_MAX_RESPONSE) && head->pyfunc == NULL) {
-                    printf("Error: block ending at line %u has missing or malformed response/pymodule!\n", line_no);
-                    return NULL;
-                }
-
-                if(!head->type) {
-                    printf("Error: block ending at line %u has missing type\n", line_no);
-                    return NULL;
-                }
-
-                if(head->dst_port >= 65535) {
-                    printf("Error: block ending at line %u has incorrect dst port\n", line_no);
-                    return NULL;
-                }
-                if(head->src_port >= 65535) {
-                    printf("Error: block ending at line %u has incorrect src port\n", line_no);
-                    return NULL;
-                }
-            }
-
             tmp->next = head;
             head = tmp;
 
-            strncpy(tmp->name, argument, sizeof(tmp->name));
+            strncpy(head->name, argument, sizeof(head->name));
 
         } else {
             if(head == NULL) {
@@ -128,13 +133,15 @@ struct matcher_entry *parse_matchers_file(char *matcher_file_path) {
                     printf("Unknown option: %s\n", argument);
                     return NULL;
                 }
-            } else if(strcmp(command, "type") == 0) {
+            } else if(strcmp(command, "proto") == 0) {
                 if(strcmp(argument, "tcp") == 0) {
-                    head->type = MATCHER_TYPE_TCP;
+                    head->proto = MATCHER_PROTO_TCP;
                 } else if(strcmp(argument, "udp") == 0) {
-                    head->type = MATCHER_TYPE_UDP;
+                    head->proto = MATCHER_PROTO_UDP;
+                } else if(strcmp(argument, "any") == 0) {
+                    head->proto = MATCHER_PROTO_ANY;
                 } else {
-                    printf("Unknown type: %s\n", argument);
+                    printf("Unknown proto: %s\n", argument);
                     return NULL;
                 }
             } else if(strcmp(command, "dst_port") == 0) {
@@ -192,6 +199,11 @@ struct matcher_entry *parse_matchers_file(char *matcher_file_path) {
                     PyErr_Print();
                     printf("No function named '"PYFUNCNAME"' in module: %s\n", argument);
                     return NULL;
+                }
+            } else if(strcmp(command, "end") == 0) {
+                // now's a good time to make sure the block had everything we care about..
+                if(head && !(head = check_block_params(head))) {
+                    return NULL; 
                 }
             } else {
                 printf("Unknown command at line %u\n", line_no);
