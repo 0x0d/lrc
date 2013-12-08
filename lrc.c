@@ -66,7 +66,7 @@ struct ctx {
 int dead;
 
 void usage(char *argv[]) {
-    printf("usage: %s -c <conf file> [interface options]", argv[0]);
+    printf("usage: %s -k <matchers file> [options]", argv[0]);
     printf("\nInterface options:\n");
     printf("\t-i <iface> : sets the listen/inject interface\n");
     printf("\t-m <iface> : sets the monitor interface\n");
