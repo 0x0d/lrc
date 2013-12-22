@@ -20,7 +20,11 @@ struct matcher_entry *check_block_params(struct matcher_entry *head) {
         return NULL;
     }
 
+    #ifdef HAVE_PYTHON
     if((head->response == NULL || head->response_len < 1 || head->response_len > MATCHER_MAX_RESPONSE) && head->pyfunc == NULL) {
+    #else
+    if((head->response == NULL || head->response_len < 1 || head->response_len > MATCHER_MAX_RESPONSE)) {
+    #endif
         printf("Error: block \"%s\" has missing or malformed response/pymodule!\n", head->name);
         return NULL;
     }
@@ -61,7 +65,9 @@ struct matcher_entry *parse_matchers_file(char *matcher_file_path) {
         const char *errptr;
         unsigned int arglen, lenread=0;
         int c, fd;
+        #ifdef HAVE_PYTHON
         int pyinitialized=0;
+        #endif
         struct stat statbuf;
 
         line_no++;
@@ -181,6 +187,7 @@ struct matcher_entry *parse_matchers_file(char *matcher_file_path) {
 
                 head->response_len = lenread;
 
+            #ifdef HAVE_PYTHON
             } else if(strcmp(command, "pymodule") == 0) {
                 if(!pyinitialized) {
                     setenv("PYTHONPATH", PYTHONPATH, 1);
@@ -200,6 +207,7 @@ struct matcher_entry *parse_matchers_file(char *matcher_file_path) {
                     printf("No function named '"PYFUNCNAME"' in module: %s\n", argument);
                     return NULL;
                 }
+            #endif
             } else if(strcmp(command, "end") == 0) {
                 // now's a good time to make sure the block had everything we care about..
                 if(head && !(head = check_block_params(head))) {

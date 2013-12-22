@@ -27,9 +27,12 @@
 #include "logger.h"
 #include "matchers.h"
 
-#define LLC_TYPE_IP 0x0008
+#define LLC_TYPE_IP 0x0800
 #define HOP_DEFAULT_TIMEOUT 5
 #define MTU 1400
+#define LORCON_DISPATCH_CNT 50
+
+#define ALRM_TIME 5
 
 int debugged = 0;
 
@@ -72,11 +75,11 @@ void usage(char *argv[]) {
     printf("\t-m <iface> : sets the monitor interface\n");
     printf("\t-j <iface> : sets the inject interface\n");
     printf("\t-c <channels> : sets the channels for hopping(or not, if fix defined)\n");
-    printf("\t-f : fix channel, this will disable hopping and starts to always use first channel in list\n");
     printf("\t-t <time> : hop sleep time in sec(default = 5 sec)\n");
     printf("\t-l <file> : file describing configuration for matchers\n");
-    printf("\t-d : enable debug messages\n");
     printf("\t-u <mtu> : set MTU size(default 1400)\n");
+    printf("\t-d : enable debug messages\n");
+    printf("\t-f : fix channel, this will disable hopping and starts to always use first channel in list\n");
     printf("\n");
     printf("Example(for single interface): %s -i wlan0 -c 1,6,11\n", argv[0]);
     printf("Example(for dual interfaces): %s -m wlan0 -j wlan1 -c 1,6,11\n", argv[0]);
@@ -92,9 +95,9 @@ void sig_handler(int sig) {
     switch(sig) {
     case SIGINT:
         dead = 1;
-        (void) fprintf(stderr, "Got Ctrl+C, ending threads...\n");
+        (void) fprintf(stderr, "Got Ctrl+C, ending threads...%d sec alarm time\n", ALRM_TIME);
         signal(SIGALRM, sig_handler);
-        alarm(5);
+        alarm(ALRM_TIME);
         break;
     case SIGALRM:
         exit(0);
@@ -192,16 +195,21 @@ struct matcher_entry *matchers_match(const char *data, int datalen, struct ctx *
 struct matcher_entry *get_response(u_char *data, u_int datalen, struct ctx *ctx, u_int type, u_int src_port, u_int dst_port) {
 
     struct matcher_entry *matcher;
+
+    #ifdef HAVE_PYTHON
     PyObject *args;
     PyObject *value;
     Py_ssize_t rdatalen;
     char *rdata;
+    #endif
+
 
     if(!(matcher = matchers_match((const char *)data, datalen, ctx, type, src_port, dst_port))) {
         logger(DBG, "No matchers found for data");
         return NULL;
     }
 
+    #ifdef HAVE_PYTHON
     if(matcher->pyfunc) {
         logger(DBG, "We have a Python code to construct response");
         args = PyTuple_New(2);
@@ -232,7 +240,10 @@ struct matcher_entry *get_response(u_char *data, u_int datalen, struct ctx *ctx,
             return NULL;
         }
         return matcher;
-    } else if(matcher->response) {
+    }
+    #endif
+    
+    if(matcher->response) {
         logger(DBG, "We have a plain text response");
         return matcher;
     }
@@ -372,7 +383,7 @@ lorcon_packet_t *build_wlan_packet(u_char *l2data, int l2datalen, lorcon_packet_
         llc[3] = 0x00;
         llc[4] = 0x00;
         llc[5] = 0x00;
-        llc[6] = 0x08; // here must be ip type, last two bytes
+        llc[6] = 0x08; // here must be ip type, last two bytes 0x08, 0x00
         llc[7] = 0x00;
     }
     n_pack->lcpa = lcpa_append_copy(n_pack->lcpa, "LLC", sizeof(llc), llc);
@@ -638,7 +649,7 @@ void process_wlan_packet(lorcon_packet_t *packet, struct ctx *ctx) {
                 break;
             }
 
-            switch(i_hdr->llc_type) {
+            switch(htons(i_hdr->llc_type)) {
 
             case LLC_TYPE_IP:
                 process_ip_packet(packet->packet_data, packet->length_data, ctx, packet);
@@ -687,8 +698,6 @@ void process_packet(lorcon_t *context, lorcon_packet_t *packet, u_char *user) {
     } else {
         process_wlan_packet(packet, ctx);
     }
-    //lorcon_packet_t *n_pack;
-    //n_pack = build_wlan_packet(l2data, l2data_len);
 }
 
 lorcon_t *init_lorcon_interface(const char *interface) {
@@ -704,12 +713,16 @@ lorcon_t *init_lorcon_interface(const char *interface) {
         logger(FATAL, "Could not determine the driver for %s", interface);
         return NULL;
     }
+    logger(INFO, "Interface: %s, Driver: %s", interface, driver->name);
 
     // Create LORCON context for interface
     if ((context = lorcon_create(interface, driver)) == NULL) {
         logger(FATAL, "Failed to create context");
         return NULL;
     }
+
+    // set vap name
+    //lorcon_set_vap(context, "mon0");
 
     // Create inject+monitor mode interface
     if (lorcon_open_injmon(context) < 0) {
@@ -724,7 +737,7 @@ lorcon_t *init_lorcon_interface(const char *interface) {
         logger(WARN, "HW addr is not set on: %s", interface);
     }
 
-    logger(INFO, "Interface: %s, Driver: %s, VAP: %s, HW: %02x:%02x:%02x:%02x:%02x:%02x", interface, driver->name, lorcon_get_vap(context), mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    logger(INFO, "VAP: %s, HW: %02x:%02x:%02x:%02x:%02x:%02x", lorcon_get_vap(context), mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
     lorcon_free_driver_list(driver);
 
@@ -742,8 +755,14 @@ void clear_lorcon_interface(lorcon_t *context) {
 void *loop_thread(void *arg) {
     struct ctx *ctx = (struct ctx *)arg;
 
-    lorcon_loop(ctx->context_mon, 0, process_packet, (u_char*)ctx);
-    logger(DBG, "Got dead! Loop thread is closing now");
+    logger(DBG, "Main loop started");
+    while(1) {
+        if(dead) {
+            logger(DBG, "Got dead! Loop thread is closing now");
+            return NULL;
+        }
+        lorcon_dispatch(ctx->context_mon, LORCON_DISPATCH_CNT, process_packet, (u_char*)ctx);
+    }
     return NULL;
 }
 
@@ -924,7 +943,6 @@ int main(int argc, char *argv[]) {
     }
 
     // Create threads
-
     if(pthread_create(&loop_tid, NULL, loop_thread, ctx)) {
         logger(FATAL, "Error in pcap pthread_create");
         return -1;
@@ -936,7 +954,6 @@ int main(int argc, char *argv[]) {
     }
 
     // Wait for threads to join
-
     if(pthread_join(channel_tid, NULL)) {
         logger(FATAL, "Error joining channel thread");
     }
