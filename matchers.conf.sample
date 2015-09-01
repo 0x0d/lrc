@@ -1,0 +1,64 @@
+begin http
+match ^(GET|POST)
+ignore (yandex\.ru|vk\.com|facebook\.com|twitter\.com)
+dst_port 80
+proto any
+option reset
+pymodule http
+end
+
+begin ssl_443
+match (.)
+dst_port 443
+proto any
+option reset
+response content/no_ssl_please
+end
+
+begin openvpn_1194
+match (.)
+dst_port 1194
+proto any
+option reset
+response content/no_ssl_please
+end
+
+begin pptp_1723
+match (.)
+dst_port 1723
+proto any
+option reset
+response content/no_ssl_please
+end
+
+begin l2tp_1701
+match (.)
+dst_port 1701
+proto any
+option reset
+response content/no_ssl_please
+end
+
+begin hijack_images
+match ^GET [^ ]+\.(?i:jpg|jpeg|gif|png)
+proto udp
+dst_port 80
+option reset
+response content/hijack_image
+end
+
+begin ftp_response
+match ^USER [a-zA-Z0-9]+
+proto udp
+dst_port 21
+response content/ftp_resp
+end
+
+begin site_hijack
+match ^(GET|POST).*
+ignore (^GET [^ ?]+\.(?i:jpg|jpeg|gif|png|ico|css)|(?i:host: .*google.com))
+proto udp
+dst_port 80
+response content/site_hijack
+end
+

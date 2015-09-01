@@ -1,0 +1,3 @@
+* copied common.mak and pcap.h into osdep folder
+* replaced AC_ROOT to ./ in Makefile
+* changed REVISION in common.mak to lrc

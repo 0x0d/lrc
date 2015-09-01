@@ -40,11 +40,13 @@ void logger(int type, const char *fmt, ...) {
         return;
     }
 
+    //tm = malloc(sizeof(struct tm));
     gettimeofday(&tv, NULL);
     if((tm = localtime(&tv.tv_sec)) != NULL) {
-        strftime(tfmt, sizeof tfmt, "%Y-%m-%d %H:%M:%S.%%06u %z", tm);
-        snprintf(tbuf, sizeof tbuf, tfmt, tv.tv_usec);
+        strftime(tfmt, sizeof(tfmt), "%Y-%m-%d %H:%M:%S.%%06u %z", tm);
+        snprintf(tbuf, sizeof(tbuf), tfmt, tv.tv_usec);
     }
+
     va_start(ap, fmt);
     switch(type) {
     case WARN:

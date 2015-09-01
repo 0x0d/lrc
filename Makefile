@@ -1,19 +1,41 @@
 # 
 #	Makefile
 HAVE_PYTHON=1
-CFLAGS=-O3 -Wall -ggdb3 -I./lorcon_install/include -DHAVE_PYTHON
-LDFLAGS=-L./lorcon_install/lib -Wl,-rpath=./lorcon_install/lib -lorcon2 -lpthread -lpcap -lpcre -lpython2.7 -lnet
+DEBUG=1
+
+CFLAGS=-Wall
+LDFLAGS=-lpthread -lpcap -lpcre -lnet -lnl-genl-3 -lnl-3
 CC=gcc
 LD=ldd
-OBJ = logger.o lrc.o matchers.o
-TARGET = lrc
-RM = rm -f
 
-all: $(TARGET)
+OBJ = logger.o lrc.o matchers.o $(OSD)/lib$(OSD).a
+
+OSD = osdep
+LIBOSD = $(OSD)/lib$(OSD).so
+
+ifeq ($(HAVE_PYTHON),1)
+	CFLAGS+=-DHAVE_PYTHON
+	LDFLAGS+=-lpython2.7
+endif
+
+ifeq ($(DEBUG),1)
+	CFLAGS+=-ggdb3
+endif
+
+all: osd lrc
 	@echo
 
-$(TARGET): $(OBJ)
-	$(CC) ${LDFLAGS} -o $@ $(OBJ)
+osd:
+	$(MAKE) -C $(OSD)
+
+$(LIBOSD):
+	$(MAKE) -C $(OSD)
+
+lrc: $(OBJ)
+	$(CC) -o $@ $(OBJ) ${LDFLAGS} 
 
 clean:
-	$(RM) $(OBJ) $(TARGET) *~
+	rm -f $(OBJ) lrc *~
+	$(MAKE) -C $(OSD) clean
+
+distclean: clean

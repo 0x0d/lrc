@@ -1,12 +1,13 @@
 # 
 #	Makefile
 #
+#
 HAVE_PYTHON=0
-STAGING_DIR=/home/invent/alfa/openwrt_buildroot/openwrt/staging_dir/toolchain-mips_r2_gcc-4.6-linaro_uClibc-0.9.33.2
+STAGING_DIR=/home/invent/alfa/openwrt_buildroot/openwrt/staging_dir/target-mips_r2_uClibc-0.9.33.2
 CFLAGS=-O3 -Wall -ggdb3 -I./lorcon_install/include  -I$(STAGING_DIR)/usr/lib/libnet-1.1.x/include -I$(STAGING_DIR)/usr/include
 LDFLAGS=-L$(STAGING_DIR)/usr/lib/libnet-1.1.x/lib -L$(STAGING_DIR)/usr/lib -L./lorcon_install/lib -Wl,-rpath=./lorcon_install/lib -lorcon2 -lpthread -lpcap -lpcre -lnet -lnl -lnl-genl
-CC=mips-openwrt-linux-uclibc-gcc
-LD=mips-openwrt-linux-uclibc-ld
+CC=/home/invent/alfa/openwrt_buildroot/openwrt/staging_dir/toolchain-mips_r2_gcc-4.6-linaro_uClibc-0.9.33.2/bin/mips-openwrt-linux-uclibc-gcc
+LD=/home/invent/alfa/openwrt_buildroot/openwrt/staging_dir/toolchain-mips_r2_gcc-4.6-linaro_uClibc-0.9.33.2/bin/mips-openwrt-linux-uclibc-ld
 OBJ = logger.o lrc.o matchers.o
 TARGET = lrc
 RM = rm -f
