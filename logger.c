@@ -1,12 +1,14 @@
-#include <string.h>
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <getopt.h>
 #include <unistd.h>
+#include <string.h>
 #include <errno.h>
 #include <time.h>
 #include <sys/time.h>
 #include <stdarg.h>
 #include <ctype.h>
+
 #include "logger.h"
 
 static FILE *logfd;

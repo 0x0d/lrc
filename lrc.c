@@ -4,7 +4,6 @@
 #include <unistd.h>
 #include <signal.h>
 
-#include <pthread.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
@@ -13,64 +12,17 @@
 #include <netinet/udp.h>
 #include <netinet/ip_icmp.h>
 
-#include <libnet.h>
-#include <pcap.h>
-
 #include <arpa/nameser.h>
 #include <resolv.h>
-
-#include "osdep/osdep.h"
-#include "ieee80211.h"
 
 #include "logger.h"
 #include "matchers.h"
 
+#include "lrc.h"
+#include "ap.h"
 
-#define LLC_TYPE_IP 0x0800
-#define HOP_DEFAULT_TIMEOUT 5
-#define MTU 1400
-
-// Can`t be > 4096
-#define MAX_PACKET_LENGTH 4096
-#define ALRM_TIME 5
-
-int debugged = 0;
-
-// context for holding program state
-struct ctx {
-    char *if_inj_name;
-    char *if_mon_name;
-
-    u_char inj_mac[6];
-    u_char mon_mac[6];
-
-    char *if_inj_vap;
-    char *if_mon_vap;
-
-    u_int channels[14];
-    u_int channel_fix;
-
-    libnet_t *lnet;
-    libnet_ptag_t p_tcp;
-    libnet_ptag_t p_udp;
-    libnet_ptag_t p_ip;
-
-    u_int mtu;
-
-    pthread_mutex_t mutex;
-
-    char *matchers_filename;
-    char *log_filename;
-    struct matcher_entry *matchers_list;
-    u_int hop_time;
-
-    // OSDEP structs
-    struct wif *wi_inj;
-    struct wif *wi_mon;
-
-};
-
-int dead;
+int dead = 0;
+int debugged = 0; 
 
 void usage(char *argv[]) {
     printf("usage: %s -k <matchers file> [options]", argv[0]);
@@ -146,31 +98,6 @@ void hexdump (void *addr, u_int len) {
     }
     // And print the final ASCII bit.
     printf ("  %s\n", buff);
-}
-
-/*
-* Convenience function to extract the ssid name from a raw 802.11 frame
-* and copy it to the ssid_name argument.  max_name_len is the length of
-* the ssid_name buffer
-*/
-int get_ssid(const u_char *packet_data, char *ssid_name, u_short max_name_len) {
-
-    if(packet_data[36] == 0) { // this is the SSID
-        u_short ssid_len = packet_data[37];
-
-        if(ssid_len == 0) {
-            ssid_name[0] = 0;
-            return 0;
-        }
-
-        u_short max_len = ssid_len > max_name_len ? max_name_len - 1 : ssid_len;
-        memcpy(ssid_name, &packet_data[38], max_len);
-        ssid_name[max_len] = 0;
-
-        return 0;
-    }
-
-    return -1;
 }
 
 struct matcher_entry *matchers_match(const char *data, int datalen, struct ctx *ctx, u_int proto, u_int src_port, u_int dst_port) {
@@ -260,7 +187,7 @@ struct matcher_entry *get_response(u_char *data, u_int datalen, struct ctx *ctx,
 int build_tcp_packet(struct iphdr *ip_hdr, struct tcphdr *tcp_hdr, u_char *data, u_int datalen, u_int tcpflags, u_int seqnum, struct ctx *ctx) {
 
     // libnet wants the data in host-byte-order
-    ctx->p_tcp = libnet_build_tcp(
+    ctx->lnet_p_tcp = libnet_build_tcp(
                 ntohs(tcp_hdr->dest), // source port
                 ntohs(tcp_hdr->source), // dest port
                 seqnum, // sequence number
@@ -273,15 +200,15 @@ int build_tcp_packet(struct iphdr *ip_hdr, struct tcphdr *tcp_hdr, u_char *data,
                 (u_char *)data, // response
                 datalen, // response_length
                 ctx->lnet, // libnet_t pointer
-                ctx->p_tcp // protocol tag
+                ctx->lnet_p_tcp // protocol tag
             );
 
-    if(ctx->p_tcp == -1) {
+    if(ctx->lnet_p_tcp == -1) {
         logger(WARN, "libnet_build_tcp returns error: %s", libnet_geterror(ctx->lnet));
         return 0;
     }
 
-    ctx->p_ip = libnet_build_ipv4(
+    ctx->lnet_p_ip = libnet_build_ipv4(
                 LIBNET_TCP_H + LIBNET_IPV4_H + datalen, // total length of IP packet
                 0, // TOS bits, type of service
                 1, // IPID identification number (need to calculate)
@@ -294,10 +221,10 @@ int build_tcp_packet(struct iphdr *ip_hdr, struct tcphdr *tcp_hdr, u_char *data,
                 NULL, // response, no payload
                 0, // response length
                 ctx->lnet, // libnet_t pointer
-                ctx->p_ip // protocol tag
+                ctx->lnet_p_ip // protocol tag
             );
 
-    if(ctx->p_ip == -1) {
+    if(ctx->lnet_p_ip == -1) {
         logger(WARN, "libnet_build_ipv4 returns error: %s", libnet_geterror(ctx->lnet));
         return 0;
     }
@@ -307,7 +234,7 @@ int build_tcp_packet(struct iphdr *ip_hdr, struct tcphdr *tcp_hdr, u_char *data,
 
 int build_udp_packet(struct iphdr *ip_hdr, struct udphdr *udp_hdr, u_char *data, u_int datalen, struct ctx *ctx) {
 
-    ctx->p_udp = libnet_build_udp(
+    ctx->lnet_p_udp = libnet_build_udp(
                 ntohs(udp_hdr->source), // source port
                 ntohs(udp_hdr->dest), // destination port
                 LIBNET_UDP_H + datalen, // total length of the UDP packet
@@ -315,14 +242,14 @@ int build_udp_packet(struct iphdr *ip_hdr, struct udphdr *udp_hdr, u_char *data,
                 NULL, // payload
                 0, // payload length
                 ctx->lnet, // pointer to libnet context
-                ctx->p_udp // protocol tag for udp
+                ctx->lnet_p_udp // protocol tag for udp
             );
-    if(ctx->p_udp == -1) {
+    if(ctx->lnet_p_udp == -1) {
         logger(WARN, "libnet_build_tcp returns error: %s", libnet_geterror(ctx->lnet));
         return 0;
     }
 
-    ctx->p_ip = libnet_build_ipv4(
+    ctx->lnet_p_ip = libnet_build_ipv4(
                 LIBNET_UDP_H + LIBNET_IPV4_H + datalen, // total length of IP packet
                 0, // TOS bits, type of service
                 1, // IPID identification number (need to calculate)
@@ -335,10 +262,10 @@ int build_udp_packet(struct iphdr *ip_hdr, struct udphdr *udp_hdr, u_char *data,
                 NULL, // response, no payload
                 0, // response length
                 ctx->lnet, // libnet_t pointer
-                ctx->p_ip // protocol tag=0, build new
+                ctx->lnet_p_ip // protocol tag=0, build new
             );
 
-    if(ctx->p_ip == -1) {
+    if(ctx->lnet_p_ip == -1) {
         logger(WARN, "libnet_build_ipv4 returns error: %s", libnet_geterror(ctx->lnet));
         return 0;
     }
@@ -355,7 +282,7 @@ u_short fnseq(u_short fn, u_short seq) {
     return htole16(r);
 }
 
-int build_wlan_packet(u_char *l2data, u_int l2datalen, u_char *wldata, u_int *wldatalen, struct ieee80211_frame *wh_old, struct ctx *ctx) {
+int build_dot11_packet(u_char *l2data, u_int l2datalen, u_char *wldata, u_int *wldatalen, struct ieee80211_frame *wh_old, struct ctx *ctx) {
 
     struct ieee80211_frame *wh = (struct ieee80211_frame*) wldata;
 
@@ -413,7 +340,7 @@ int send_packet(struct ieee80211_frame *wh, struct ctx *ctx) {
         return 0;
     }
 
-    if(build_wlan_packet(l2data, l2datalen, wldata, &wldatalen, wh,  ctx)) {
+    if(build_dot11_packet(l2data, l2datalen, wldata, &wldatalen, wh,  ctx)) {
         rc = wi_write(ctx->wi_inj, wldata, wldatalen, NULL);
         if(rc == -1) {
             printf("wi_write() error\n");
@@ -428,13 +355,13 @@ int send_packet(struct ieee80211_frame *wh, struct ctx *ctx) {
 void clear_packet(struct ctx *ctx) {
     if(ctx->lnet) {
         libnet_clear_packet(ctx->lnet);
-        ctx->p_ip = LIBNET_PTAG_INITIALIZER;
-        ctx->p_tcp = LIBNET_PTAG_INITIALIZER;
-        ctx->p_udp = LIBNET_PTAG_INITIALIZER;
+        ctx->lnet_p_ip = LIBNET_PTAG_INITIALIZER;
+        ctx->lnet_p_tcp = LIBNET_PTAG_INITIALIZER;
+        ctx->lnet_p_udp = LIBNET_PTAG_INITIALIZER;
     }
 }
 
-void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ieee80211_frame *wh, struct ctx *ctx) {
+void ip_packet_process(const u_char *dot3, u_int dot3_len, struct ieee80211_frame *wh, struct ctx *ctx) {
 
     struct iphdr *ip_hdr;
     struct tcphdr *tcp_hdr;
@@ -608,90 +535,215 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ieee80211_fram
 }
 
 
-void read_beacon(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
+int parse_rsn(unsigned char *p, int len, int rsn) {               
+    int c;  
+    unsigned char *start = p;
+    int psk = 0;
+
+    if (len < 2) {
+        return 0;
+    }
+        
+    if (memcmp(p, "\x01\x00", 2) != 0) {
+        return 0;
+    }
+    
+    if (len < 8) {
+        return 0;
+    }
+    
+    p += 2;
+    p += 4; 
+
+    /* cipher */
+    c = le16toh(*((uint16_t*) p));
+                        
+    p += 2 + 4 * c;     
+                    
+    if (len < ((p - start) + 2)) {
+        return 0;
+    }
+
+    /* auth */
+    c = le16toh(*((uint16_t*) p));
+    p += 2;
+
+    if (len < ((p - start) + c * 4)) {
+        return 0;
+    }
+
+    while (c--) {
+        if (rsn && memcmp(p, "\x00\x0f\xac\x02", 4) == 0) {
+            psk++;
+        }
+
+        if (!rsn && memcmp(p, "\x00\x50\xf2\x02", 4) == 0) {
+            psk++;
+        }
+        p += 4;
+    }
+    
+    if (!psk) {
+        return CRYPT_TYPE_WPA_MGT;
+    } else {
+        return CRYPT_TYPE_WPA;
+    }
+}
+
+int parse_elem_vendor(unsigned char *e, int l) {       
+    struct ieee80211_ie_wpa *wpa = (struct ieee80211_ie_wpa*) e;
+
+    if (l < 5) {
+        return 0;
+    }
+
+    if (memcmp(wpa->wpa_oui, "\x00\x50\xf2", 3) != 0) {
+        return 0;
+    }
+
+    if (l < 8) {
+        return 0;
+    }
+
+    if (wpa->wpa_type != WPA_OUI_TYPE) {
+        return 0;
+    }
+
+    return parse_rsn((unsigned char*) &wpa->wpa_version, l - 6, 0);
+}
+
+
+
+void dot11_beacon_process(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
 
     ieee80211_mgt_beacon_t wb = (ieee80211_mgt_beacon_t) (wh+1);
-    int bhlen = 12; // fixed parameters length
-    u_char ie_len;
-    char ssid[256];
-    int got_ssid = 0, got_channel = 0;
+    int fix_len = 12; // fixed parameters length
+    int rc;
 
-    len -= sizeof(*wh) + bhlen;
-    if (len < 0) {
-        logger(WARN, "Short beacon %d", len);
+    int ie_type;
+    u_char ie_len;
+    char ssid[MAX_IE_ELEMENT_SIZE];
+    int channel;
+    int crypt_type = CRYPT_TYPE_OPEN;
+    int got_ssid = 0, got_channel = 0;
+    uint8_t *bssid = wh->i_addr3;
+    
+    // skip wh header len
+    len -= sizeof(*wh);
+
+    if((IEEE80211_BEACON_CAPABILITY(wb) & IEEE80211_CAPINFO_PRIVACY)) {
+        crypt_type = CRYPT_TYPE_WEP;
+    }
+    
+    wb += fix_len; // skip fixed params
+    len -= fix_len;
+
+    if(len < 0) {
+        logger(WARN, "Too short beacon frame");
         return;
     }
 
-    wb += bhlen; // skip fixed params
-    
+    // let`s parse tagged params
     while (len > 1) {
+
+        ie_type = wb[0];
         ie_len = wb[1];
 
-        len -= 2 + ie_len;
-        if (len < 0) {
-            logger(WARN, "Short IE %d %d", len, ie_len);
-            return;
-        }
-        
-        switch (wb[0]) {
+        switch (ie_type) {
             case IEEE80211_ELEMID_SSID:
                 if (!got_ssid) {
-                    strncpy(ssid, (char*) &wb[2], ie_len);
-                    ssid[ie_len] = '\0';
-                    if(strlen(ssid)) {
+                    if(ie_len > 0) {
+                        strncpy(ssid, (char*) &wb[2], ie_len);
+                        ssid[ie_len] = '\0';
                         got_ssid = 1;
+                    } else { //hidden ssid
+                        logger(WARN, "Got hidden ssid!"); // TODO
                     }
                 } 
                 break;
             case IEEE80211_ELEMID_DSPARMS:
                 if (!got_channel)
-                    got_channel = wb[2];
+                    channel = wb[2];
+                    got_channel = 1;
+                break;
+        
+            case IEEE80211_ELEMID_VENDOR:
+                if((rc = parse_elem_vendor(wb, ie_len + 2))) {
+                    crypt_type = rc;
+                }
+                break;
+
+            case IEEE80211_ELEMID_RSN:
+                if((rc = parse_rsn(&wb[2], ie_len, 1))) {
+                    crypt_type = rc;
+                }
                 break;
         }
 
-        if (got_ssid && got_channel) {
-            logger(DBG, "Beacon frame SSID: %s Channel: %d", ssid, got_channel);
-            return;
-        }
-
         wb += 2 + ie_len;
-    } 
+        len -= 2 + ie_len;
+         
+    }
+
+    if (got_ssid && got_channel) {
+        logger(DBG, "Beacon frame, SSID: %s Channel: %d", ssid, channel);
+        switch(crypt_type) {
+            case CRYPT_TYPE_WEP:
+                logger(DBG, "Crypt: WEP");
+                break;
+            case CRYPT_TYPE_WPA:
+                logger(DBG, "Crypt: WPA");
+                break;
+            case CRYPT_TYPE_WPA_MGT:
+                logger(DBG, "Crypt: WPA-MGT");
+                break;
+            case CRYPT_TYPE_OPEN:
+                logger(DBG, "Crypt: OPEN");
+                break;
+            default:
+                logger(WARN, "Cannot determine crypt type");
+                break;
+        }
+        ap_add(ctx, bssid, ssid, crypt_type);
+        return;
+    }
 }
 
-void read_mgt(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
+void dot11_mgt_process(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
 
     if (len < (int) sizeof(*wh)) {
         logger(DBG, "802.11 too short management packet: %d, skipping it", len);
         return;
     }
     switch (wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK) {
+
+        // Beacons and Probe responses contains SSID and other useful information about AP
         case IEEE80211_FC0_SUBTYPE_BEACON:
         case IEEE80211_FC0_SUBTYPE_PROBE_RESP:
-            read_beacon(ctx, wh, len);
+            logger(DBG, "We got beacon or probe response frame");
+            dot11_beacon_process(ctx, wh, len);
             break;
 
         case IEEE80211_FC0_SUBTYPE_AUTH:
-            printf("we got auth frame\n");
-            //read_auth(es, wh, len);
+            logger(DBG, "We got auth frame");
             break;
 
         case IEEE80211_FC0_SUBTYPE_PROBE_REQ:
         case IEEE80211_FC0_SUBTYPE_ASSOC_REQ:
+            // TODO extract info from this frames. they are similar to beacon
+            logger(DBG, "We got probe request or association frame. TODO extract info from it.");
             break;
 
         case IEEE80211_FC0_SUBTYPE_DEAUTH:
-            printf("we got deauth frame\n");
-            //read_deauth(es, wh, len);
+            logger(DBG, "We got deauth frame");
             break;
 
         case IEEE80211_FC0_SUBTYPE_DISASSOC:
-            printf("we got dissassoc frame\n");
-            //read_disassoc(es, wh, len);
+            logger(DBG, "We got dissassociation frame");
             break;
 
         case IEEE80211_FC0_SUBTYPE_ASSOC_RESP:
-            printf("we got assoc_resp frame\n");
-            //read_assoc_resp(es, wh, len);
+            logger(DBG, "We got association response frame");
             break;
 
         default:
@@ -701,14 +753,14 @@ void read_mgt(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
     
 }
 
-void read_ack(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
+void dot11_ack_process(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
     //printf("Ack\n");
 }
 
-void read_ctl(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
+void dot11_ctl_process(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
     switch (wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK) {
     case IEEE80211_FC0_SUBTYPE_ACK:
-        read_ack(ctx, wh, len);
+        dot11_ack_process(ctx, wh, len);
         break;
 
     case IEEE80211_FC0_SUBTYPE_RTS:
@@ -725,7 +777,7 @@ void read_ctl(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
 }
 
 
-void read_data(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
+void dot11_data_process(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
 
     u_char *p = (u_char*) (wh + 1);
     int protected = wh->i_fc[1] & IEEE80211_FC1_WEP;
@@ -776,17 +828,17 @@ void read_data(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
     }
 
     if (len > 0) {
-        process_ip_packet(p, len, wh, ctx);
+        ip_packet_process(p, len, wh, ctx);
     }
 }
 
-void process_packet(u_char *pkt, int len,  struct rx_info *rxi, struct ctx *ctx) {
+void dot11_process(u_char *pkt, int len,  struct rx_info *rxi, struct ctx *ctx) {
 
     struct ieee80211_frame *wh = (struct ieee80211_frame *) pkt;
     int protected = wh->i_fc[1] & IEEE80211_FC1_WEP;
 
     logger(DBG, "Radiotap data: ri_channel: %d, ri_power: %d, ri_noise: %d, ri_rate: %d", rxi->ri_channel, rxi->ri_power, rxi->ri_noise, rxi->ri_rate);
-    logger(DBG, "IEEE802.11 frame type:0x%02X subtype:0x%02X protected:%s direction:%s addr1:[%02X:%02X:%02X:%02X:%02X:%02X] addr2:[%02X:%02X:%02X:%02X:%02X:%02X] addr3:[%02X:%02X:%02X:%02X:%02X:%02X]",
+    logger(DBG, "IEEE802.11 frame type:0x%02X subtype:0x%02X protected:%s direction:%s receiver:[%02X:%02X:%02X:%02X:%02X:%02X] transmitter:[%02X:%02X:%02X:%02X:%02X:%02X] bssid:[%02X:%02X:%02X:%02X:%02X:%02X]",
                 wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK,
                 wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK,
                 protected ? "y":"n",
@@ -797,15 +849,15 @@ void process_packet(u_char *pkt, int len,  struct rx_info *rxi, struct ctx *ctx)
 
     switch (wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) {
         case IEEE80211_FC0_TYPE_MGT: // management frame
-            read_mgt(ctx, wh, len);
+            dot11_mgt_process(ctx, wh, len);
             break;
 
-        case IEEE80211_FC0_TYPE_CTL:
-            read_ctl(ctx, wh, len);
+        case IEEE80211_FC0_TYPE_CTL: // control frame
+            dot11_ctl_process(ctx, wh, len);
             break;
 
-        case IEEE80211_FC0_TYPE_DATA:
-            read_data(ctx, wh, len);
+        case IEEE80211_FC0_TYPE_DATA: //data frame
+            dot11_data_process(ctx, wh, len);
             break;
         default:
             logger(DBG, "Unknown frame type: 0x%02X", wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK);
@@ -849,7 +901,7 @@ void *loop_thread(void *arg) {
                     continue;
                 }
                 pthread_mutex_lock (&(ctx->mutex));
-                process_packet(pkt, caplen, rxi, ctx);
+                dot11_process(pkt, caplen, rxi, ctx);
                 pthread_mutex_unlock (&(ctx->mutex));
             }
         }
@@ -878,8 +930,6 @@ int channel_change(struct ctx *ctx, int channel) {
     return 1;
 }
 
-
-//TODO add pthread lock here
 // Channel switch thread
 void *channel_thread(void *arg) {
     struct ctx *ctx = (struct ctx *)arg;
@@ -924,6 +974,9 @@ int main(int argc, char *argv[]) {
 
     int ch_c;
     char *ch;
+    
+    char *log_fn = NULL;
+    char *matchers_fn = MATCHERS_DEFAULT_FILENAME;
 
     struct ctx *ctx = calloc(1, sizeof(struct ctx));
 
@@ -935,11 +988,9 @@ int main(int argc, char *argv[]) {
     ctx->channel_fix=0;
     ctx->mtu = MTU;
     ctx->hop_time = HOP_DEFAULT_TIMEOUT;
-    ctx->matchers_filename = MATCHERS_DEFAULT_FILENAME;
-    ctx->log_filename = NULL;
 
     // init libnet tags
-    ctx->p_ip = ctx->p_tcp = ctx->p_udp = LIBNET_PTAG_INITIALIZER;
+    ctx->lnet_p_ip = ctx->lnet_p_tcp = ctx->lnet_p_udp = LIBNET_PTAG_INITIALIZER;
 
     printf ("%s - Simple 802.11 hijacker\n", argv[0]);
     printf ("-----------------------------------------------------\n\n");
@@ -978,10 +1029,10 @@ int main(int argc, char *argv[]) {
             ctx->hop_time = atoi(optarg);
             break;
         case 'l':
-            ctx->log_filename = strdup(optarg);
+            log_fn = strdup(optarg);
             break;
         case 'k':
-            ctx->matchers_filename = strdup(optarg);
+            matchers_fn = strdup(optarg);
             break;
         case 'h':
             usage(argv);
@@ -1020,16 +1071,16 @@ int main(int argc, char *argv[]) {
         return -1;
     }
 
-    if(!(ctx->matchers_list = parse_matchers_file(ctx->matchers_filename))) {
-        (void) fprintf(stderr, "Error during parsing matchers file: %s\n", ctx->matchers_filename);
+    if(!(ctx->matchers_list = parse_matchers_file(matchers_fn))) {
+        (void) fprintf(stderr, "Error during parsing matchers file: %s\n", matchers_fn);
         return -1;
     }
 
-    if (!logger_init(ctx->log_filename)) {
-        (void) fprintf(stderr, "Fail to open log file: %s (%s)\n", ctx->log_filename, strerror(errno));
+    if (!logger_init(log_fn)) {
+        (void) fprintf(stderr, "Fail to open log file: %s (%s)\n", log_fn, strerror(errno));
         return -1;
-    } else if(ctx->log_filename) {
-        (void) fprintf(stderr, "Logging to file: %s\n", ctx->log_filename);
+    } else if(log_fn) {
+        (void) fprintf(stderr, "Logging to file: %s\n", log_fn);
     }
 
     // Initiaize libnet context, so we can construct packets later. lo - because we just need any interface name here, and the name doesn`t matter.
@@ -1045,8 +1096,8 @@ int main(int argc, char *argv[]) {
         logger(FATAL, "Fail to initialize monitor interface: %s", ctx->if_mon_name);
         return -1;
     }
-    wi_get_mac(ctx->wi_mon, ctx->mon_mac);
-    logger(INFO, "Initialized %s interface for monitor. HW: %02x:%02x:%02x:%02x:%02x:%02x", wi_get_ifname(ctx->wi_mon), ctx->mon_mac[0], ctx->mon_mac[1], ctx->mon_mac[2], ctx->mon_mac[3], ctx->mon_mac[4], ctx->mon_mac[5]);
+    wi_get_mac(ctx->wi_mon, ctx->if_mon_mac);
+    logger(INFO, "Initialized %s interface for monitor. HW: %02x:%02x:%02x:%02x:%02x:%02x", wi_get_ifname(ctx->wi_mon), ctx->if_mon_mac[0], ctx->if_mon_mac[1], ctx->if_mon_mac[2], ctx->if_mon_mac[3], ctx->if_mon_mac[4], ctx->if_mon_mac[5]);
  
     if(!strcmp(ctx->if_inj_name, ctx->if_mon_name)) {
         logger(INFO, "Monitor and inject interfaces are the same, so inject == monitor");
@@ -1056,8 +1107,8 @@ int main(int argc, char *argv[]) {
             logger(FATAL, "Fail to initialize inject interface: %s", ctx->if_inj_name);
             return -1;
         }
-        wi_get_mac(ctx->wi_inj, ctx->inj_mac);
-        logger(INFO, "Initialized %s interface for inject. HW: %02x:%02x:%02x:%02x:%02x:%02x", wi_get_ifname(ctx->wi_inj), ctx->inj_mac[0], ctx->inj_mac[1], ctx->inj_mac[2], ctx->inj_mac[3], ctx->inj_mac[4], ctx->inj_mac[5]);
+        wi_get_mac(ctx->wi_inj, ctx->if_inj_mac);
+        logger(INFO, "Initialized %s interface for inject. HW: %02x:%02x:%02x:%02x:%02x:%02x", wi_get_ifname(ctx->wi_inj), ctx->if_inj_mac[0], ctx->if_inj_mac[1], ctx->if_inj_mac[2], ctx->if_inj_mac[3], ctx->if_inj_mac[4], ctx->if_inj_mac[5]);
     }
 
     // Set the channels we'll be monitor and inject on

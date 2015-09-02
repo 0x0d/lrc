@@ -8,7 +8,7 @@ LDFLAGS=-lpthread -lpcap -lpcre -lnet -lnl-genl-3 -lnl-3
 CC=gcc
 LD=ldd
 
-OBJ = logger.o lrc.o matchers.o $(OSD)/lib$(OSD).a
+OBJ = logger.o ap.o lrc.o matchers.o $(OSD)/lib$(OSD).a
 
 OSD = osdep
 LIBOSD = $(OSD)/lib$(OSD).so
