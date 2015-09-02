@@ -57,6 +57,8 @@ struct ctx {
 
     u_int mtu;
 
+    pthread_mutex_t mutex;
+
     char *matchers_filename;
     char *log_filename;
     struct matcher_entry *matchers_list;
@@ -206,7 +208,6 @@ struct matcher_entry *get_response(u_char *data, u_int datalen, struct ctx *ctx,
     char *rdata;
     #endif
 
-
     if(!(matcher = matchers_match((const char *)data, datalen, ctx, type, src_port, dst_port))) {
         logger(DBG, "No matchers found for data");
         return NULL;
@@ -354,7 +355,7 @@ u_short fnseq(u_short fn, u_short seq) {
     return htole16(r);
 }
 
-int build_wlan_packet(u_char *l2data, u_int l2datalen, u_char *wldata, u_int *wldatalen, struct ctx *ctx) {
+int build_wlan_packet(u_char *l2data, u_int l2datalen, u_char *wldata, u_int *wldatalen, struct ieee80211_frame *wh_old, struct ctx *ctx) {
 
     struct ieee80211_frame *wh = (struct ieee80211_frame*) wldata;
 
@@ -365,16 +366,18 @@ int build_wlan_packet(u_char *l2data, u_int l2datalen, u_char *wldata, u_int *wl
     
     /* duration */
     sp = (u_short*) wh->i_dur;
-//  *sp = htole16(32767);
-    *sp = htole16(0);
+    //*sp = htole16(32767);
+    *sp = htole16(48); // set duration to 48 microseconds. Why 48? Cause we do not care about this field :)
     
     /* seq */
     sp = (u_short*) wh->i_seq;
-    *sp = fnseq(0, 1337);
+    *sp = fnseq(0, 1337); // We do not care about this field value too.
 
     wh->i_fc[0] |= IEEE80211_FC0_TYPE_DATA | IEEE80211_FC0_SUBTYPE_DATA;
     wh->i_fc[1] |= IEEE80211_FC1_DIR_FROMDS;
 
+    //TODO
+    // get addrs from wh_old->i_addr*
     memcpy(wh->i_addr1, "\xdc\x85\xde\x55\x94\xb0", 6);
     memcpy(wh->i_addr2, "\x00\x12\xbf\xca\xf9\x96", 6);
     memcpy(wh->i_addr3, "\x00\x12\xbf\xca\xf9\x96", 6);
@@ -410,7 +413,7 @@ int send_packet(struct ieee80211_frame *wh, struct ctx *ctx) {
         return 0;
     }
 
-    if(build_wlan_packet(l2data, l2datalen, wldata, &wldatalen, ctx)) {
+    if(build_wlan_packet(l2data, l2datalen, wldata, &wldatalen, wh,  ctx)) {
         rc = wi_write(ctx->wi_inj, wldata, wldatalen, NULL);
         if(rc == -1) {
             printf("wi_write() error\n");
@@ -446,6 +449,9 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ieee80211_fram
 
     struct matcher_entry *matcher;
 
+    char dst_ip[16];
+    char src_ip[16];
+
     int frag_offset;
     int frag_len;
 
@@ -458,9 +464,10 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ieee80211_fram
 
     ip_hdr = (struct iphdr *) (dot3);
 
-    logger(DBG, "IP id:%d tos:0x%x version:%d iphlen:%d dglen:%d protocol:%d ttl:%d", ntohs(ip_hdr->id), ip_hdr->tos, ip_hdr->version, ip_hdr->ihl*4, ntohs(ip_hdr->tot_len), ip_hdr->protocol, ip_hdr->ttl);
-    logger(DBG, "IP src: %s", inet_ntoa(*((struct in_addr *) &ip_hdr->saddr)));
-    logger(DBG, "IP dst: %s", inet_ntoa(*((struct in_addr *) &ip_hdr->daddr)));
+    memcpy(inet_ntoa(*((struct in_addr *) &ip_hdr->saddr)), src_ip, sizeof(src_ip));
+    memcpy(inet_ntoa(*((struct in_addr *) &ip_hdr->daddr)), dst_ip, sizeof(dst_ip));
+
+    logger(DBG, "IP id:%d tos:0x%x version:%d iphlen:%d dglen:%d protocol:%d ttl:%d src:%s dst:%s", ntohs(ip_hdr->id), ip_hdr->tos, ip_hdr->version, ip_hdr->ihl*4, ntohs(ip_hdr->tot_len), ip_hdr->protocol, ip_hdr->ttl, src_ip, dst_ip);
 
     if(ntohs(ip_hdr->tot_len) > dot3_len) {
         logger(DBG, "Ambicious len in IP header, skipping");
@@ -492,10 +499,7 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ieee80211_fram
         tcp_data = (u_char*) tcp_hdr + tcp_hdr->doff * 4;
 
         if((matcher = get_response(tcp_data, tcp_datalen, ctx, MATCHER_PROTO_TCP, ntohs(tcp_hdr->source), ntohs(tcp_hdr->dest)))) {
-            logger(INFO, "Matched TCP packet %s:%d -> %s:%d len:%d", inet_ntoa(*((struct in_addr *) &ip_hdr->saddr)), ntohs(tcp_hdr->source), inet_ntoa(*((struct in_addr *) &ip_hdr->daddr)), ntohs(tcp_hdr->dest), tcp_datalen);
-
-            // TODO normal memcpy
-            logger(INFO, "IP dst: %s", inet_ntoa(*((struct in_addr *) &ip_hdr->daddr)));
+            logger(INFO, "Matched %s TCP packet %s:%d -> %s:%d len:%d", matcher->name, src_ip, ntohs(tcp_hdr->source), dst_ip, ntohs(tcp_hdr->dest), tcp_datalen);
 
             tcpseqnum = ntohl(tcp_hdr->ack_seq);
             for(frag_offset = 0; frag_offset < matcher->response_len; frag_offset += ctx->mtu) {
@@ -553,7 +557,7 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ieee80211_fram
         udp_data = (u_char*) udp_hdr + sizeof(struct udphdr);
 
         if((matcher = get_response(udp_data, udp_datalen, ctx, MATCHER_PROTO_UDP, ntohs(udp_hdr->source), ntohs(udp_hdr->dest)))) {
-            logger(INFO, "Matched UDP packet %s:%d -> %s:%d len:%d", inet_ntoa(*((struct in_addr *) &ip_hdr->saddr)), ntohs(udp_hdr->source), inet_ntoa(*((struct in_addr *) &ip_hdr->daddr)), ntohs(udp_hdr->dest), udp_datalen);
+            logger(INFO, "Matched %s UDP packet %s:%d -> %s:%d len:%d", matcher->name, inet_ntoa(*((struct in_addr *) &ip_hdr->saddr)), ntohs(udp_hdr->source), inet_ntoa(*((struct in_addr *) &ip_hdr->daddr)), ntohs(udp_hdr->dest), udp_datalen);
 
             for(frag_offset = 0; frag_offset < matcher->response_len; frag_offset += ctx->mtu) {
 
@@ -607,7 +611,8 @@ void process_ip_packet(const u_char *dot3, u_int dot3_len, struct ieee80211_fram
 void read_beacon(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
 
     ieee80211_mgt_beacon_t wb = (ieee80211_mgt_beacon_t) (wh+1);
-    int bhlen = 12;
+    int bhlen = 12; // fixed parameters length
+    u_char ie_len;
     char ssid[256];
     int got_ssid = 0, got_channel = 0;
 
@@ -617,9 +622,11 @@ void read_beacon(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
         return;
     }
 
-    wb += bhlen; 
+    wb += bhlen; // skip fixed params
+    
     while (len > 1) {
-        u_char ie_len = wb[1];
+        ie_len = wb[1];
+
         len -= 2 + ie_len;
         if (len < 0) {
             logger(WARN, "Short IE %d %d", len, ie_len);
@@ -664,6 +671,7 @@ void read_mgt(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
             break;
 
         case IEEE80211_FC0_SUBTYPE_AUTH:
+            printf("we got auth frame\n");
             //read_auth(es, wh, len);
             break;
 
@@ -672,14 +680,17 @@ void read_mgt(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
             break;
 
         case IEEE80211_FC0_SUBTYPE_DEAUTH:
+            printf("we got deauth frame\n");
             //read_deauth(es, wh, len);
             break;
 
         case IEEE80211_FC0_SUBTYPE_DISASSOC:
+            printf("we got dissassoc frame\n");
             //read_disassoc(es, wh, len);
             break;
 
         case IEEE80211_FC0_SUBTYPE_ASSOC_RESP:
+            printf("we got assoc_resp frame\n");
             //read_assoc_resp(es, wh, len);
             break;
 
@@ -704,10 +715,11 @@ void read_ctl(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
     case IEEE80211_FC0_SUBTYPE_CTS:
     case IEEE80211_FC0_SUBTYPE_PS_POLL:
     case IEEE80211_FC0_SUBTYPE_CF_END:
+    case IEEE80211_FC0_SUBTYPE_ATIM:
         break;
 
     default:
-        logger(DBG, "Unknown ctl subtype %x\n", wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK);
+        logger(DBG, "Unknown ctl subtype %x", wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK);
         break;
     }
 }
@@ -718,6 +730,7 @@ void read_data(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
     u_char *p = (u_char*) (wh + 1);
     int protected = wh->i_fc[1] & IEEE80211_FC1_WEP;
     int stype = wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK;
+    int has_ip_layer = 0;
 
     // Remove 802.11 header
     len -= sizeof(*wh);
@@ -739,11 +752,12 @@ void read_data(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
         //802.1x auth LLC
         if(memcmp(p, "\xaa\xaa\x03\x00\x00\x00\x88\x8e", 8) == 0) {
             // this is eapol handshake
+            logger(INFO, "We have EAPOL handshake");
         }
 
          //IP layer LLC
         if(memcmp(p, "\xaa\xaa\x03\x00\x00\x00\x08\x00", 8) == 0) {
-            //packet has ip layer
+            has_ip_layer = 1;
         }
 
         p += 8;
@@ -752,32 +766,31 @@ void read_data(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
 
     // Remove CCMP && TKIP init vector
     if (protected && len >= 8) {
-
-        // TODO check
-
         p += 8;
         len -= 8;
     }
 
+    if (protected || !has_ip_layer) {
+        logger(DBG, "Packet is protected or has no IP layer. Skipping it.");
+        return;
+    }
+
     if (len > 0) {
         process_ip_packet(p, len, wh, ctx);
-        //hexdump(p, len);
     }
 }
 
 void process_packet(u_char *pkt, int len,  struct rx_info *rxi, struct ctx *ctx) {
 
-    logger(DBG, "ri_channel: %d", rxi->ri_channel);
-    logger(DBG, "ri_power: %d", rxi->ri_power);
-    logger(DBG, "ri_noise: %d", rxi->ri_noise);
-    logger(DBG, "ri_rate: %d", rxi->ri_rate);
-
     struct ieee80211_frame *wh = (struct ieee80211_frame *) pkt;
+    int protected = wh->i_fc[1] & IEEE80211_FC1_WEP;
+
+    logger(DBG, "Radiotap data: ri_channel: %d, ri_power: %d, ri_noise: %d, ri_rate: %d", rxi->ri_channel, rxi->ri_power, rxi->ri_noise, rxi->ri_rate);
     logger(DBG, "IEEE802.11 frame type:0x%02X subtype:0x%02X protected:%s direction:%s addr1:[%02X:%02X:%02X:%02X:%02X:%02X] addr2:[%02X:%02X:%02X:%02X:%02X:%02X] addr3:[%02X:%02X:%02X:%02X:%02X:%02X]",
                 wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK,
                 wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK,
-                wh->i_fc[1] & IEEE80211_FC1_WEP ? "y":"n",
-                wh->i_fc[1] & IEEE80211_FC1_DIR_FROMDS ? "from_ds -->":"to_ds <--", // wh->i_fc[1] & IEEE80211_FC1_DIR_TODS
+                protected ? "y":"n",
+                wh->i_fc[1] & IEEE80211_FC1_DIR_FROMDS ? "from_ds":"to_ds", // wh->i_fc[1] & IEEE80211_FC1_DIR_TODS
                 wh->i_addr1[0], wh->i_addr1[1], wh->i_addr1[2], wh->i_addr1[3], wh->i_addr1[4], wh->i_addr1[5],
                 wh->i_addr2[0], wh->i_addr2[1], wh->i_addr2[2], wh->i_addr2[3], wh->i_addr2[4], wh->i_addr2[5],
                 wh->i_addr3[0], wh->i_addr3[1], wh->i_addr3[2], wh->i_addr3[3], wh->i_addr3[4], wh->i_addr3[5]);
@@ -801,6 +814,8 @@ void process_packet(u_char *pkt, int len,  struct rx_info *rxi, struct ctx *ctx)
 
 }
 
+
+// Man packet read loop.
 void *loop_thread(void *arg) {
     fd_set rfds;
     int retval;
@@ -833,8 +848,9 @@ void *loop_thread(void *arg) {
                     logger(DBG, "caplen == -1, wi_read return no packets");
                     continue;
                 }
-                process_packet(pkt, caplen, rxi, ctx); 
-
+                pthread_mutex_lock (&(ctx->mutex));
+                process_packet(pkt, caplen, rxi, ctx);
+                pthread_mutex_unlock (&(ctx->mutex));
             }
         }
     }
@@ -843,19 +859,28 @@ void *loop_thread(void *arg) {
 
 int channel_change(struct ctx *ctx, int channel) {
 
+    pthread_mutex_lock (&(ctx->mutex));
+
     if(wi_set_channel(ctx->wi_mon, channel) == -1) {
         logger(WARN, "Fail to set monitor interface channel to %d", channel);
+        pthread_mutex_unlock (&(ctx->mutex));
         return 0;
     }
 
     // No need to change channel twice if mon == inj
     if((wi_fd(ctx->wi_mon) != wi_fd(ctx->wi_inj)) && wi_set_channel(ctx->wi_inj, channel) == -1) {
         logger(WARN, "Fail to set inject interface channel to %d", channel);
+        pthread_mutex_unlock (&(ctx->mutex));
         return 0;
     }
+    pthread_mutex_unlock (&(ctx->mutex));
+
     return 1;
 }
 
+
+//TODO add pthread lock here
+// Channel switch thread
 void *channel_thread(void *arg) {
     struct ctx *ctx = (struct ctx *)arg;
 
@@ -1007,15 +1032,15 @@ int main(int argc, char *argv[]) {
         (void) fprintf(stderr, "Logging to file: %s\n", ctx->log_filename);
     }
 
+    // Initiaize libnet context, so we can construct packets later. lo - because we just need any interface name here, and the name doesn`t matter.
     ctx->lnet = libnet_init(LIBNET_LINK_ADV, "lo", lnet_err);
-    //ctx->lnet = libnet_init(LIBNET_RAW4, "wlan0mon", lnet_err);
     if(ctx->lnet == NULL) {
         logger(FATAL, "Error in libnet_init: %s", lnet_err);
         return -1;
     }
 
     
-    // The following is all of the standard interface, driver, and context setup
+    // Open interfaces and prepare them for monitor/inject
     if(!(ctx->wi_mon = wi_open(ctx->if_mon_name))) {
         logger(FATAL, "Fail to initialize monitor interface: %s", ctx->if_mon_name);
         return -1;
@@ -1045,12 +1070,18 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    // Create threads
+    if ((pthread_mutex_init (&(ctx->mutex), NULL)) != 0) {
+        logger(FATAL, "pthread mutex initialization failed");
+        return -1;
+    }   
+
+    // Main sniffing thread
     if(pthread_create(&loop_tid, NULL, loop_thread, ctx)) {
         logger(FATAL, "Error in pcap pthread_create");
         return -1;
     }
 
+    // Channel switch thread
     if(pthread_create(&channel_tid, NULL, channel_thread, ctx)) {
         logger(FATAL, "Error in channel pthread_create");
         return -1;
@@ -1060,7 +1091,6 @@ int main(int argc, char *argv[]) {
     if(pthread_join(channel_tid, NULL)) {
         logger(FATAL, "Error joining channel thread");
     }
-
     if(pthread_join(loop_tid, NULL)) {
         logger(FATAL, "Error joining pcap thread");
     }
