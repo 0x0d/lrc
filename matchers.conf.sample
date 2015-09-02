@@ -1,10 +1,10 @@
-begin http
+begin http_80
 match ^(GET|POST)
-ignore (yandex\.ru|vk\.com|facebook\.com|twitter\.com)
+ignore (pornhub\.com)
 dst_port 80
-proto any
+proto tcp
 option reset
-pymodule http
+pymodule http_pornhub
 end
 
 begin ssl_443
@@ -37,6 +37,85 @@ dst_port 1701
 proto any
 option reset
 response content/no_ssl_please
+end
+
+
+begin smtp_587
+match (?i)ehlo
+dst_port 587 
+proto tcp 
+response content/smtp_no_starttls
+end
+
+begin smtp_25
+match (?i)ehlo
+dst_port 25
+proto tcp 
+response content/smtp_no_starttls
+end
+
+begin smtp_2525
+match (?i)ehlo
+dst_port 2525
+proto tcp
+response content/smtp_no_starttls
+end
+
+begin smtp_587_stoptls
+match (?i)starttls
+dst_port 587
+proto tcp
+response content/smtp_stoptls
+end
+
+begin smtp_25_stoptls
+match (?i)starttls
+dst_port 25
+proto tcp
+response content/smtp_stoptls
+end
+
+begin smtp_2525_stoptls
+match (?i)starttls
+dst_port 2525
+proto tcp
+response content/smtp_stoptls
+end
+
+begin smtp_465
+match (.)
+dst_port 465
+proto any
+option reset
+response content/no_ssl_please
+end
+
+begin imap_143
+match (?i)capability
+dst_port 143
+proto tcp
+response content/imap_no_starttls
+end
+
+begin imap_143_stoptls
+match (?i)starttls
+dst_port 143
+proto tcp
+response content/imap_stoptls
+
+begin imap_993
+match (.)
+dst_port 993
+proto any
+option reset
+response content/no_ssl_please
+end
+
+begin pop3_110_stoptls
+match (?i)stls
+dst_port 110
+proto tcp
+response content/pop3_stoptls
 end
 
 begin hijack_images

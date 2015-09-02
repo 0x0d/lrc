@@ -1,0 +1,13 @@
+HTTP/1.1 200 OK
+Connection: close
+Content-Type: text/html
+Content-Length: 200
+
+<html>
+<head>
+<title>pwned</title>
+</head>
+<body>
+Hello DEFCON people!
+</body>
+</html>
