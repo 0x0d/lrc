@@ -6,7 +6,7 @@
 #include "ap.h"
 #include "logger.h"
 
-struct ap_info *ap_lookup (struct ctx *ctx, const uint8_t *bssid) {
+struct ap_info *ap_lookup(struct ctx *ctx, const uint8_t *bssid) {
     struct ap_info *ap_cur = ctx->ap_list;
     while (ap_cur != NULL) {   
         if (!memcmp (ap_cur->bssid, bssid, 6)) { 

@@ -303,11 +303,9 @@ int build_dot11_packet(u_char *l2data, u_int l2datalen, u_char *wldata, u_int *w
     wh->i_fc[0] |= IEEE80211_FC0_TYPE_DATA | IEEE80211_FC0_SUBTYPE_DATA;
     wh->i_fc[1] |= IEEE80211_FC1_DIR_FROMDS;
 
-    //TODO
-    // get addrs from wh_old->i_addr*
-    memcpy(wh->i_addr1, "\xdc\x85\xde\x55\x94\xb0", 6);
-    memcpy(wh->i_addr2, "\x00\x12\xbf\xca\xf9\x96", 6);
-    memcpy(wh->i_addr3, "\x00\x12\xbf\xca\xf9\x96", 6);
+    memcpy(wh->i_addr1, wh_old->i_addr2, 6);
+    memcpy(wh->i_addr2, wh_old->i_addr1, 6);
+    memcpy(wh->i_addr3, wh_old->i_addr3, 6);
 
     // LLC IP fill
     memcpy(data, "\xAA\xAA\x03\x00\x00\x00\x08\x00", 8);
@@ -391,8 +389,8 @@ void ip_packet_process(const u_char *dot3, u_int dot3_len, struct ieee80211_fram
 
     ip_hdr = (struct iphdr *) (dot3);
 
-    memcpy(inet_ntoa(*((struct in_addr *) &ip_hdr->saddr)), src_ip, sizeof(src_ip));
-    memcpy(inet_ntoa(*((struct in_addr *) &ip_hdr->daddr)), dst_ip, sizeof(dst_ip));
+    memcpy(&src_ip, inet_ntoa(*((struct in_addr *) &ip_hdr->saddr)), sizeof(src_ip));
+    memcpy(&dst_ip, inet_ntoa(*((struct in_addr *) &ip_hdr->daddr)), sizeof(dst_ip));
 
     logger(DBG, "IP id:%d tos:0x%x version:%d iphlen:%d dglen:%d protocol:%d ttl:%d src:%s dst:%s", ntohs(ip_hdr->id), ip_hdr->tos, ip_hdr->version, ip_hdr->ihl*4, ntohs(ip_hdr->tot_len), ip_hdr->protocol, ip_hdr->ttl, src_ip, dst_ip);
 
@@ -484,7 +482,7 @@ void ip_packet_process(const u_char *dot3, u_int dot3_len, struct ieee80211_fram
         udp_data = (u_char*) udp_hdr + sizeof(struct udphdr);
 
         if((matcher = get_response(udp_data, udp_datalen, ctx, MATCHER_PROTO_UDP, ntohs(udp_hdr->source), ntohs(udp_hdr->dest)))) {
-            logger(INFO, "Matched %s UDP packet %s:%d -> %s:%d len:%d", matcher->name, inet_ntoa(*((struct in_addr *) &ip_hdr->saddr)), ntohs(udp_hdr->source), inet_ntoa(*((struct in_addr *) &ip_hdr->daddr)), ntohs(udp_hdr->dest), udp_datalen);
+            logger(INFO, "Matched %s UDP packet %s:%d -> %s:%d len:%d", matcher->name, src_ip, ntohs(udp_hdr->source), dst_ip, ntohs(udp_hdr->dest), udp_datalen);
 
             for(frag_offset = 0; frag_offset < matcher->response_len; frag_offset += ctx->mtu) {
 
@@ -513,7 +511,7 @@ void ip_packet_process(const u_char *dot3, u_int dot3_len, struct ieee80211_fram
                     break;
                 }
 
-                if(send_packet(wh, ctx)) {
+                if(!send_packet(wh, ctx)) {
                     logger(WARN, "Cannot inject UDP reset packet");
                 }
 
@@ -626,6 +624,7 @@ void dot11_beacon_process(struct ctx *ctx, struct ieee80211_frame *wh, int len) 
     int channel;
     int crypt_type = CRYPT_TYPE_OPEN;
     int got_ssid = 0, got_channel = 0;
+    
     uint8_t *bssid = wh->i_addr3;
     
     // skip wh header len
@@ -655,10 +654,10 @@ void dot11_beacon_process(struct ctx *ctx, struct ieee80211_frame *wh, int len) 
                     if(ie_len > 0) {
                         strncpy(ssid, (char*) &wb[2], ie_len);
                         ssid[ie_len] = '\0';
-                        got_ssid = 1;
                     } else { //hidden ssid
-                        logger(WARN, "Got hidden ssid!"); // TODO
+                        ssid[0] = '\0';
                     }
+                    got_ssid = 1;
                 } 
                 break;
             case IEEE80211_ELEMID_DSPARMS:
@@ -686,7 +685,7 @@ void dot11_beacon_process(struct ctx *ctx, struct ieee80211_frame *wh, int len) 
     }
 
     if (got_ssid && got_channel) {
-        logger(DBG, "Beacon frame, SSID: %s Channel: %d", ssid, channel);
+        logger(DBG, "SSID: %s Channel: %d", ssid, channel);
         switch(crypt_type) {
             case CRYPT_TYPE_WEP:
                 logger(DBG, "Crypt: WEP");
@@ -704,8 +703,8 @@ void dot11_beacon_process(struct ctx *ctx, struct ieee80211_frame *wh, int len) 
                 logger(WARN, "Cannot determine crypt type");
                 break;
         }
+
         ap_add(ctx, bssid, ssid, crypt_type);
-        return;
     }
 }
 
@@ -720,30 +719,30 @@ void dot11_mgt_process(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
         // Beacons and Probe responses contains SSID and other useful information about AP
         case IEEE80211_FC0_SUBTYPE_BEACON:
         case IEEE80211_FC0_SUBTYPE_PROBE_RESP:
-            logger(DBG, "We got beacon or probe response frame");
+            logger(DBG, "Management beacon or probe response frame");
             dot11_beacon_process(ctx, wh, len);
             break;
 
         case IEEE80211_FC0_SUBTYPE_AUTH:
-            logger(DBG, "We got auth frame");
+            logger(DBG, "Management auth frame");
             break;
 
         case IEEE80211_FC0_SUBTYPE_PROBE_REQ:
         case IEEE80211_FC0_SUBTYPE_ASSOC_REQ:
-            // TODO extract info from this frames. they are similar to beacon
-            logger(DBG, "We got probe request or association frame. TODO extract info from it.");
+            // TODO extract info from this frames. They can be useful.
+            logger(DBG, "Management probe request or association frame.");
             break;
 
         case IEEE80211_FC0_SUBTYPE_DEAUTH:
-            logger(DBG, "We got deauth frame");
+            logger(DBG, "Management deauth frame");
             break;
 
         case IEEE80211_FC0_SUBTYPE_DISASSOC:
-            logger(DBG, "We got dissassociation frame");
+            logger(DBG, "Management dissassociation frame");
             break;
 
         case IEEE80211_FC0_SUBTYPE_ASSOC_RESP:
-            logger(DBG, "We got association response frame");
+            logger(DBG, "Management association response frame");
             break;
 
         default:
@@ -753,41 +752,98 @@ void dot11_mgt_process(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
     
 }
 
-void dot11_ack_process(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
-    //printf("Ack\n");
-}
-
 void dot11_ctl_process(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
     switch (wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK) {
-    case IEEE80211_FC0_SUBTYPE_ACK:
-        dot11_ack_process(ctx, wh, len);
-        break;
+        case IEEE80211_FC0_SUBTYPE_ACK:
+            logger(DBG, "Control ask frame");
+            break;
 
-    case IEEE80211_FC0_SUBTYPE_RTS:
-    case IEEE80211_FC0_SUBTYPE_CTS:
-    case IEEE80211_FC0_SUBTYPE_PS_POLL:
-    case IEEE80211_FC0_SUBTYPE_CF_END:
-    case IEEE80211_FC0_SUBTYPE_ATIM:
-        break;
+        case IEEE80211_FC0_SUBTYPE_RTS:
+        case IEEE80211_FC0_SUBTYPE_CTS:
+        case IEEE80211_FC0_SUBTYPE_PS_POLL:
+        case IEEE80211_FC0_SUBTYPE_CF_END:
+        case IEEE80211_FC0_SUBTYPE_ATIM:
+            logger(DBG, "Control rts/cts/ps/cf/atim frame");
+            break;
 
-    default:
-        logger(DBG, "Unknown ctl subtype %x", wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK);
-        break;
+        default:
+            logger(DBG, "Unknown ctl subtype %x", wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK);
+            break;
     }
 }
 
+void eapol_wpa_process(struct ctx *ctx, u_char *p, int len, struct sta_info *sta_cur) {
+    /* frame 1: Pairwise == 1, Install == 0, Ack == 1, MIC == 0 */
+    if ((p[6] & 0x08) != 0 && (p[6] & 0x40) == 0 && (p[6] & 0x80) != 0 && (p[5] & 0x01) == 0) {
+        memcpy (sta_cur->wpa.anonce, &p[17], 32);
+        sta_cur->wpa.state = 1;
+        logger(INFO, "EAPOL step 1 done");
+    }
+    /* frame 2 or 4: Pairwise == 1, Install == 0, Ack == 0, MIC == 1 */
+    if ((p[6] & 0x08) != 0 && (p[6] & 0x40) == 0 && (p[6] & 0x80) == 0 && (p[5] & 0x01) != 0 && sta_cur->wpa.state != EAPOL_STATE_COMPLETE) {
+        if (memcmp (&p[17], ZERO, 32) != 0) {
+            memcpy (sta_cur->wpa.snonce, &p[17], 32);
+            sta_cur->wpa.state |= 2;
+            logger(INFO, "EAPOL step 2 done");
+        }
+
+        if ((sta_cur->wpa.state & 4) != 4) {
+            sta_cur->wpa.eapol_size = (p[2] << 8) + p[3] + 4;
+            if(len < sta_cur->wpa.eapol_size || sta_cur->wpa.eapol_size == 0 ) {
+                // Ignore the packet trying to crash us.
+                return;
+            }
+
+            memcpy (sta_cur->wpa.keymic, &p[81], 16);
+            memcpy (sta_cur->wpa.eapol, &p, sta_cur->wpa.eapol_size);
+            memset (sta_cur->wpa.eapol + 81, 0, 16);
+            sta_cur->wpa.state |= 4;
+            sta_cur->wpa.keyver = p[6] & 7;
+            logger(INFO, "EAPOL step 4 done");
+        }
+    }
+    /* frame 3: Pairwise == 1, Install == 1, Ack == 1, MIC == 1 */
+    if ((p[6] & 0x08) != 0 && (p[6] & 0x40) != 0 && (p[6] & 0x80) != 0 && (p[5] & 0x01) != 0) {
+        if (memcmp (&p[17], ZERO, 32) != 0) {
+            memcpy (sta_cur->wpa.anonce, &p[17], 32);
+            sta_cur->wpa.state |= 1;
+            logger(INFO, "EAPOL step 3 done");
+        }
+        if ((sta_cur->wpa.state & 4) != 4) {
+            sta_cur->wpa.eapol_size = (p[2] << 8) + p[3] + 4;
+            if(len < sta_cur->wpa.eapol_size || sta_cur->wpa.eapol_size == 0 ) {
+                // Ignore the packet trying to crash us.
+                return;
+            }
+            memcpy (sta_cur->wpa.keymic, &p[81], 16);
+            memcpy (sta_cur->wpa.eapol, &p, sta_cur->wpa.eapol_size);
+            memset (sta_cur->wpa.eapol + 81, 0, 16);
+            sta_cur->wpa.state |= 4;
+            sta_cur->wpa.keyver = p[6] & 7;
+            logger(INFO, "EAPOL step 4 done");
+        }
+    }
+
+    if (sta_cur->wpa.state == EAPOL_STATE_COMPLETE) {
+        memcpy (sta_cur->wpa.stmac, sta_cur->sta_mac, 6);
+        logger(INFO, "WPA handshake complete");
+    }
+}
 
 void dot11_data_process(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
 
     u_char *p = (u_char*) (wh + 1);
     int protected = wh->i_fc[1] & IEEE80211_FC1_WEP;
     int stype = wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK;
-    int has_ip_layer = 0;
+    uint8_t *bssid, *sta_mac;
 
-    // Remove 802.11 header
+    struct ap_info *ap_cur = NULL;
+    struct sta_info *sta_cur = NULL;
+
+    // Skip 802.11 header
     len -= sizeof(*wh);
     
-    // Remove QOS header
+    // Skip QOS header
     switch(stype) {
         case IEEE80211_FC0_SUBTYPE_QOS:
         case IEEE80211_FC0_SUBTYPE_QOS_NULL:
@@ -796,39 +852,78 @@ void dot11_data_process(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
         case IEEE80211_FC0_SUBTYPE_CF_ACPL:
             p += 2;
             len -= 2;
-    }
-   
-    // Remove LLC header(if exist)
-    if (!protected && len >= 8 && (p[0] == 0xaa && p[1] == 0xaa && p[2] == 0x03)) {
-
-        //802.1x auth LLC
-        if(memcmp(p, "\xaa\xaa\x03\x00\x00\x00\x88\x8e", 8) == 0) {
-            // this is eapol handshake
-            logger(INFO, "We have EAPOL handshake");
-        }
-
-         //IP layer LLC
-        if(memcmp(p, "\xaa\xaa\x03\x00\x00\x00\x08\x00", 8) == 0) {
-            has_ip_layer = 1;
-        }
-
-        p += 8;
-        len -= 8;
-    }
-
-    // Remove CCMP && TKIP init vector
-    if (protected && len >= 8) {
-        p += 8;
-        len -= 8;
+            if(wh->i_fc[1] & IEEE80211_FC1_DIR_FROMDS) {
+                bssid = wh->i_addr2;
+                sta_mac = wh->i_addr1;
+            } else {
+                bssid = wh->i_addr1;
+                sta_mac = wh->i_addr2;
+            }
+            break;
+        case IEEE80211_FC0_SUBTYPE_DATA:
+            if(wh->i_fc[1] & IEEE80211_FC1_DIR_FROMDS) {
+                bssid = wh->i_addr2;
+                sta_mac = wh->i_addr3;
+            } else {
+                bssid = wh->i_addr1;
+                sta_mac = wh->i_addr2;
+            }
+            break;
+        default:
+            return;
     }
 
-    if (protected || !has_ip_layer) {
-        logger(DBG, "Packet is protected or has no IP layer. Skipping it.");
+    if(!(ap_cur = ap_lookup(ctx, bssid))) {
+        logger(INFO, "Cannot found AP [%02X:%02X:%02X:%02X:%02X:%02X] in cache, skipping", bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5]);
         return;
+    } 
+
+    if(!(sta_cur = sta_lookup(ctx, sta_mac))) {
+        sta_cur = sta_add(ctx, sta_mac);
+        sta_cur->ap = ap_cur;
+    } else {
+        //logger(INFO, "We found STA in cache:[%02X:%02X:%02X:%02X:%02X:%02X]", sta_mac[0], sta_mac[1], sta_mac[2], sta_mac[3], sta_mac[4], sta_mac[5]);                 
     }
 
-    if (len > 0) {
-        ip_packet_process(p, len, wh, ctx);
+
+
+    // Not protected packets(without WEP flag set)
+    if (!protected) {
+        // Check we have LLC header(if exist)
+        if(len >= LLC_SIZE && (p[0] == 0xaa && p[1] == 0xaa && p[2] == 0x03)) {
+
+            //802.1x auth LLC
+            if(memcmp(p, "\xaa\xaa\x03\x00\x00\x00\x88\x8e", LLC_SIZE) == 0) {
+
+                p += LLC_SIZE;
+                len -= LLC_SIZE; 
+                
+                if(len > 0 && (sta_cur->wpa.state != EAPOL_STATE_COMPLETE)) {
+                    eapol_wpa_process(ctx, p, len, sta_cur);
+                }
+
+             }
+
+             //IP layer LLC, so try to hijack it
+            if(memcmp(p, "\xaa\xaa\x03\x00\x00\x00\x08\x00", LLC_SIZE) == 0) {
+
+                p += LLC_SIZE;
+                len -= LLC_SIZE;
+ 
+                if(len > 0) {
+                    ip_packet_process(p, len, wh, ctx);
+                }
+            }
+
+       }
+    }
+
+    if(protected) {
+        // Remove CCMP && TKIP init vector from protected packet
+        if (len >= 8) {
+            p += 8;
+            len -= 8;
+        }
     }
 }
 
@@ -837,6 +932,7 @@ void dot11_process(u_char *pkt, int len,  struct rx_info *rxi, struct ctx *ctx) 
     struct ieee80211_frame *wh = (struct ieee80211_frame *) pkt;
     int protected = wh->i_fc[1] & IEEE80211_FC1_WEP;
 
+    logger(DBG, "-------------------------");
     logger(DBG, "Radiotap data: ri_channel: %d, ri_power: %d, ri_noise: %d, ri_rate: %d", rxi->ri_channel, rxi->ri_power, rxi->ri_noise, rxi->ri_rate);
     logger(DBG, "IEEE802.11 frame type:0x%02X subtype:0x%02X protected:%s direction:%s receiver:[%02X:%02X:%02X:%02X:%02X:%02X] transmitter:[%02X:%02X:%02X:%02X:%02X:%02X] bssid:[%02X:%02X:%02X:%02X:%02X:%02X]",
                 wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK,
@@ -849,14 +945,17 @@ void dot11_process(u_char *pkt, int len,  struct rx_info *rxi, struct ctx *ctx) 
 
     switch (wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) {
         case IEEE80211_FC0_TYPE_MGT: // management frame
+            logger(DBG, "Management frame");
             dot11_mgt_process(ctx, wh, len);
             break;
 
         case IEEE80211_FC0_TYPE_CTL: // control frame
+            logger(DBG, "Control frame");
             dot11_ctl_process(ctx, wh, len);
             break;
 
         case IEEE80211_FC0_TYPE_DATA: //data frame
+            logger(DBG, "Data frame");
             dot11_data_process(ctx, wh, len);
             break;
         default:

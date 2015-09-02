@@ -29,10 +29,6 @@ struct wpa_info{
     int state;
 #define WEP_HEADER_LEN 4
 #define WPA_HEADER_LEN 8
-#define DOT11_FromDS 2
-#define DOT11_ToDS 1
-    uint8_t wpa_header_FromDS[WPA_HEADER_LEN];
-    uint8_t wpa_header_ToDS[WPA_HEADER_LEN];
 };
 
 struct sta_info {
@@ -49,5 +45,7 @@ struct sta_info {
 };
 
 int ap_add (struct ctx *, const uint8_t *, const char *, int);
-
+struct ap_info *ap_lookup (struct ctx *, const uint8_t *);
+struct sta_info *sta_lookup (struct ctx *, const uint8_t *);
+struct sta_info * sta_add (struct ctx *, const uint8_t *);
 #endif
