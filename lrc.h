@@ -49,7 +49,11 @@ struct ctx {
     struct ap_info *ap_list;
     struct sta_info *sta_list;
 
+    struct threadqueue *brute_queue;
 };
+
+#define BRUTE_STA 1
+#define BRUTE_EXIT 2
 
 #define ZERO "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00 \
 \x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00 \

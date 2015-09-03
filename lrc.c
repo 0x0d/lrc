@@ -15,11 +15,11 @@
 #include <arpa/nameser.h>
 #include <resolv.h>
 
+#include "lrc.h"
 #include "logger.h"
 #include "matchers.h"
-
-#include "lrc.h"
 #include "ap.h"
+#include "tqueue.h"
 
 int dead = 0;
 int debugged = 0; 
@@ -827,6 +827,7 @@ void eapol_wpa_process(struct ctx *ctx, u_char *p, int len, struct sta_info *sta
     if (sta_cur->wpa.state == EAPOL_STATE_COMPLETE) {
         memcpy (sta_cur->wpa.stmac, sta_cur->sta_mac, 6);
         logger(INFO, "WPA handshake complete");
+        thread_queue_add(ctx->brute_queue, sta_cur, BRUTE_STA); 
     }
 }
 
@@ -1064,11 +1065,42 @@ void *channel_thread(void *arg) {
     return NULL;
 }
 
+void *bruteforce_thread(void *arg) {
+    struct ctx *ctx = (struct ctx *)arg; 
+    struct sta_info *sta_cur;
+    struct threadmsg msg; 
+
+    while(1) {
+        if(dead) {
+            logger(INFO, "Got dead! Bruteforce thread is closing now");
+            return NULL;
+        }
+        if(thread_queue_get(ctx->brute_queue, NULL, &msg) == 0) {
+
+                switch(msg.msgtype) {
+                    case BRUTE_STA:
+                        sta_cur = msg.data;
+                        logger(INFO, "AAAAAAAAAAAAAAAAAAAAAA we got brute task for: %s", sta_cur->ap->essid);
+                        break;
+                    case BRUTE_EXIT:
+                        return NULL;
+                        break;
+                }
+
+        } else {
+            logger(WARN, "Some problem with queue");
+            break;
+        }
+    }
+    return NULL;
+}
+
 int main(int argc, char *argv[]) {
 
     int c;
     pthread_t loop_tid;
     pthread_t channel_tid;
+    pthread_t brute_tid;
     char lnet_err[LIBNET_ERRBUF_SIZE];
 
     int ch_c;
@@ -1076,6 +1108,8 @@ int main(int argc, char *argv[]) {
     
     char *log_fn = NULL;
     char *matchers_fn = MATCHERS_DEFAULT_FILENAME;
+
+    struct threadqueue bqueue;
 
     struct ctx *ctx = calloc(1, sizeof(struct ctx));
 
@@ -1220,14 +1254,26 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    if(thread_queue_init(&bqueue) != 0) {
+        logger(FATAL, "Cannot initialize queue");
+        return -1;
+    }
+    ctx->brute_queue = &bqueue;
+
     if ((pthread_mutex_init (&(ctx->mutex), NULL)) != 0) {
         logger(FATAL, "pthread mutex initialization failed");
         return -1;
     }   
 
+    // Bruteforce thread
+    if(pthread_create(&brute_tid, NULL, bruteforce_thread, ctx)) {
+        logger(FATAL, "Error in bruteforce pthread_create");
+        return -1;
+    }
+
     // Main sniffing thread
     if(pthread_create(&loop_tid, NULL, loop_thread, ctx)) {
-        logger(FATAL, "Error in pcap pthread_create");
+        logger(FATAL, "Error in loop pthread_create");
         return -1;
     }
 
@@ -1242,7 +1288,10 @@ int main(int argc, char *argv[]) {
         logger(FATAL, "Error joining channel thread");
     }
     if(pthread_join(loop_tid, NULL)) {
-        logger(FATAL, "Error joining pcap thread");
+        logger(FATAL, "Error joining loop thread");
+    }
+    if(pthread_join(brute_tid, NULL)) {
+        logger(FATAL, "Error joining bruteforce thread");
     }
 
     logger(INFO, "We are done");
