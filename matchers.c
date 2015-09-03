@@ -76,12 +76,12 @@ struct matcher_entry *parse_matchers_file(char *matcher_file_path) {
 
         sscanf(matcher_line, "%64s", command);
 
-        if(command[0] == 0) {
+        if(command[0] == 0 || command[0] == '#') {
             continue;
         }
 
         argument = matcher_line + strlen(command);
-        // skip over any whitespiace
+        // skip over any whitespace
         while(*argument == 0x20 || *argument == 0x09) {
             argument++;
         }

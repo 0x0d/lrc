@@ -1,12 +1,14 @@
+# Hijack HTTP on port 80, match GET or POST requests for "pornhub.com" and then call python module called http_pornhub for response generation
 begin http_80
-match ^(GET|POST)
-ignore (pornhub\.com)
+match ^(GET|POST).*
+ignore (^GET [^ ?]+\.(?i:jpg|jpeg|gif|png|ico|css)|(?i:host: .*pornhub.com))
 dst_port 80
 proto tcp
 option reset
 pymodule http_pornhub
 end
 
+# Deny all HTTPS via sending fake response and RST packet after than
 begin ssl_443
 match (.)
 dst_port 443
@@ -15,6 +17,7 @@ option reset
 response content/no_ssl_please
 end
 
+# Deny OpenVPN via sending fake response and RST packet after than 
 begin openvpn_1194
 match (.)
 dst_port 1194
@@ -23,6 +26,7 @@ option reset
 response content/no_ssl_please
 end
 
+# Deny PPTP via sending fake response and RST packet after than 
 begin pptp_1723
 match (.)
 dst_port 1723
@@ -31,6 +35,7 @@ option reset
 response content/no_ssl_please
 end
 
+# Deny L2TP via sending fake response and RST packet after than 
 begin l2tp_1701
 match (.)
 dst_port 1701
@@ -39,7 +44,7 @@ option reset
 response content/no_ssl_please
 end
 
-
+# Deny OpenVPN via sending fake response and RST packet after than 
 begin smtp_587
 match (?i)ehlo
 dst_port 587 
@@ -47,6 +52,7 @@ proto tcp
 response content/smtp_no_starttls
 end
 
+# Send fake SMTP response from server, and trying to "deny" STARTTLS in smtp
 begin smtp_25
 match (?i)ehlo
 dst_port 25
@@ -54,6 +60,7 @@ proto tcp
 response content/smtp_no_starttls
 end
 
+# Send fake SMTP response from server, and trying to "deny" STARTTLS in smtp
 begin smtp_2525
 match (?i)ehlo
 dst_port 2525
@@ -61,6 +68,7 @@ proto tcp
 response content/smtp_no_starttls
 end
 
+# Send fake response on starttls command in SMTP 
 begin smtp_587_stoptls
 match (?i)starttls
 dst_port 587
@@ -68,6 +76,7 @@ proto tcp
 response content/smtp_stoptls
 end
 
+# Send fake response on starttls command in SMTP 
 begin smtp_25_stoptls
 match (?i)starttls
 dst_port 25
@@ -75,6 +84,7 @@ proto tcp
 response content/smtp_stoptls
 end
 
+# Send fake response on starttls command in SMTP 
 begin smtp_2525_stoptls
 match (?i)starttls
 dst_port 2525
@@ -82,6 +92,7 @@ proto tcp
 response content/smtp_stoptls
 end
 
+# Just reset all SSL SMTP connections
 begin smtp_465
 match (.)
 dst_port 465
@@ -117,27 +128,3 @@ dst_port 110
 proto tcp
 response content/pop3_stoptls
 end
-
-begin hijack_images
-match ^GET [^ ]+\.(?i:jpg|jpeg|gif|png)
-proto udp
-dst_port 80
-option reset
-response content/hijack_image
-end
-
-begin ftp_response
-match ^USER [a-zA-Z0-9]+
-proto udp
-dst_port 21
-response content/ftp_resp
-end
-
-begin site_hijack
-match ^(GET|POST).*
-ignore (^GET [^ ?]+\.(?i:jpg|jpeg|gif|png|ico|css)|(?i:host: .*google.com))
-proto udp
-dst_port 80
-response content/site_hijack
-end
-
