@@ -153,7 +153,6 @@ int thread_queue_get(struct threadqueue *queue, const struct timespec *timeout, 
     return 0;
 }
 
-//maybe caller should supply a callback for cleaning the elements ?
 int thread_queue_cleanup(struct threadqueue *queue, int freedata) {
     struct msglist *rec;
     struct msglist *next;

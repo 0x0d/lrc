@@ -20,6 +20,7 @@
 #include "matchers.h"
 #include "ap.h"
 #include "tqueue.h"
+#include "crypto.h"
 
 int dead = 0;
 int debugged = 0; 
@@ -610,8 +611,6 @@ int parse_elem_vendor(unsigned char *e, int l) {
     return parse_rsn((unsigned char*) &wpa->wpa_version, l - 6, 0);
 }
 
-
-
 void dot11_beacon_process(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
 
     ieee80211_mgt_beacon_t wb = (ieee80211_mgt_beacon_t) (wh+1);
@@ -772,64 +771,6 @@ void dot11_ctl_process(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
     }
 }
 
-void eapol_wpa_process(struct ctx *ctx, u_char *p, int len, struct sta_info *sta_cur) {
-    /* frame 1: Pairwise == 1, Install == 0, Ack == 1, MIC == 0 */
-    if ((p[6] & 0x08) != 0 && (p[6] & 0x40) == 0 && (p[6] & 0x80) != 0 && (p[5] & 0x01) == 0) {
-        memcpy (sta_cur->wpa.anonce, &p[17], 32);
-        sta_cur->wpa.state = 1;
-        logger(INFO, "EAPOL step 1 done");
-    }
-    /* frame 2 or 4: Pairwise == 1, Install == 0, Ack == 0, MIC == 1 */
-    if ((p[6] & 0x08) != 0 && (p[6] & 0x40) == 0 && (p[6] & 0x80) == 0 && (p[5] & 0x01) != 0 && sta_cur->wpa.state != EAPOL_STATE_COMPLETE) {
-        if (memcmp (&p[17], ZERO, 32) != 0) {
-            memcpy (sta_cur->wpa.snonce, &p[17], 32);
-            sta_cur->wpa.state |= 2;
-            logger(INFO, "EAPOL step 2 done");
-        }
-
-        if ((sta_cur->wpa.state & 4) != 4) {
-            sta_cur->wpa.eapol_size = (p[2] << 8) + p[3] + 4;
-            if(len < sta_cur->wpa.eapol_size || sta_cur->wpa.eapol_size == 0 ) {
-                // Ignore the packet trying to crash us.
-                return;
-            }
-
-            memcpy (sta_cur->wpa.keymic, &p[81], 16);
-            memcpy (sta_cur->wpa.eapol, &p, sta_cur->wpa.eapol_size);
-            memset (sta_cur->wpa.eapol + 81, 0, 16);
-            sta_cur->wpa.state |= 4;
-            sta_cur->wpa.keyver = p[6] & 7;
-            logger(INFO, "EAPOL step 4 done");
-        }
-    }
-    /* frame 3: Pairwise == 1, Install == 1, Ack == 1, MIC == 1 */
-    if ((p[6] & 0x08) != 0 && (p[6] & 0x40) != 0 && (p[6] & 0x80) != 0 && (p[5] & 0x01) != 0) {
-        if (memcmp (&p[17], ZERO, 32) != 0) {
-            memcpy (sta_cur->wpa.anonce, &p[17], 32);
-            sta_cur->wpa.state |= 1;
-            logger(INFO, "EAPOL step 3 done");
-        }
-        if ((sta_cur->wpa.state & 4) != 4) {
-            sta_cur->wpa.eapol_size = (p[2] << 8) + p[3] + 4;
-            if(len < sta_cur->wpa.eapol_size || sta_cur->wpa.eapol_size == 0 ) {
-                // Ignore the packet trying to crash us.
-                return;
-            }
-            memcpy (sta_cur->wpa.keymic, &p[81], 16);
-            memcpy (sta_cur->wpa.eapol, &p, sta_cur->wpa.eapol_size);
-            memset (sta_cur->wpa.eapol + 81, 0, 16);
-            sta_cur->wpa.state |= 4;
-            sta_cur->wpa.keyver = p[6] & 7;
-            logger(INFO, "EAPOL step 4 done");
-        }
-    }
-
-    if (sta_cur->wpa.state == EAPOL_STATE_COMPLETE) {
-        memcpy (sta_cur->wpa.stmac, sta_cur->sta_mac, 6);
-        logger(INFO, "WPA handshake complete");
-        thread_queue_add(ctx->brute_queue, sta_cur, BRUTE_STA); 
-    }
-}
 
 void dot11_data_process(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
 
@@ -882,11 +823,7 @@ void dot11_data_process(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
     if(!(sta_cur = sta_lookup(ctx, sta_mac))) {
         sta_cur = sta_add(ctx, sta_mac);
         sta_cur->ap = ap_cur;
-    } else {
-        //logger(INFO, "We found STA in cache:[%02X:%02X:%02X:%02X:%02X:%02X]", sta_mac[0], sta_mac[1], sta_mac[2], sta_mac[3], sta_mac[4], sta_mac[5]);                 
-    }
-
-
+    } 
 
     // Not protected packets(without WEP flag set)
     if (!protected) {
@@ -901,8 +838,13 @@ void dot11_data_process(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
                 
                 if(len > 0 && (sta_cur->wpa.state != EAPOL_STATE_COMPLETE)) {
                     eapol_wpa_process(ctx, p, len, sta_cur);
-                }
 
+                    if (sta_cur->wpa.state == EAPOL_STATE_COMPLETE) {
+                        memcpy (sta_cur->wpa.stmac, sta_cur->sta_mac, 6);
+                        logger(INFO, "WPA handshake complete");
+                        thread_queue_add(ctx->brute_queue, sta_cur, BRUTE_STA); 
+                    }
+                }
              }
 
              //IP layer LLC, so try to hijack it
@@ -1070,6 +1012,44 @@ void *bruteforce_thread(void *arg) {
     struct sta_info *sta_cur;
     struct threadmsg msg; 
 
+    char *passwords[PW_MAX_COUNT];
+    bzero(passwords, sizeof(passwords));
+
+    int size = PW_MAX_SIZE, pos, c;
+    char *buffer = (char *)malloc(size);
+    int pw_iter = 0;
+    int pw_len;
+
+
+
+    FILE *fp;
+    if(!(fp = fopen(ctx->pw_fn, "r"))) {
+        logger(FATAL, "Fail to open wordlist file: %s", ctx->pw_fn);
+        return NULL;
+    }
+    do { // read all lines in file
+        pos = 0;
+        do { // read one line
+            c = fgetc(fp);
+            if(c != EOF) {
+                buffer[pos++] = (char)c;
+            }
+            if(pos >= size - 1) { // increase buffer length - leave room for 0
+                size *=2;
+                buffer = (char*)realloc(buffer, size);
+            }
+        } while((c != EOF) && (c != '\n'));
+
+        buffer[pos-1] = 0; // remove \n
+        pw_len = strlen(buffer);
+
+        passwords[pw_iter] = malloc(pw_len);
+        strncpy(passwords[pw_iter], buffer, pw_len);
+        pw_iter++;
+    } while((c != EOF) && (pw_iter != PW_MAX_COUNT));
+    fclose(fp);          
+    free(buffer);
+
     while(1) {
         if(dead) {
             logger(INFO, "Got dead! Bruteforce thread is closing now");
@@ -1080,8 +1060,19 @@ void *bruteforce_thread(void *arg) {
                 switch(msg.msgtype) {
                     case BRUTE_STA:
                         sta_cur = msg.data;
-                        logger(INFO, "AAAAAAAAAAAAAAAAAAAAAA we got brute task for: %s", sta_cur->ap->essid);
-                        break;
+                        logger(INFO, "We got brute task for: %s[%02X:%02X:%02X:%02X:%02X:%02X] STA: [%02X:%02X:%02X:%02X:%02X:%02X]", sta_cur->ap->essid, sta_cur->ap->bssid[0], sta_cur->ap->bssid[1], sta_cur->ap->bssid[2], sta_cur->ap->bssid[3], sta_cur->ap->bssid[4], sta_cur->ap->bssid[5], sta_cur->wpa.stmac[0], sta_cur->wpa.stmac[1], sta_cur->wpa.stmac[2], sta_cur->wpa.stmac[3], sta_cur->wpa.stmac[4], sta_cur->wpa.stmac[5]);
+
+                        for(int i=0; i < PW_MAX_COUNT; i++) {
+                            if(passwords[i]) {
+                                if(check_wpa_password(passwords[i], sta_cur)) {
+                                    printf("OK\n");
+                                } else {
+                                    printf("FAIL\n");
+                                }
+                            }
+                        }
+
+                       break;
                     case BRUTE_EXIT:
                         return NULL;
                         break;
@@ -1130,7 +1121,7 @@ int main(int argc, char *argv[]) {
 
     // This handles all of the command line arguments
 
-    while ((c = getopt(argc, argv, "i:c:j:m:ft:l:k:hdu:")) != EOF) {
+    while ((c = getopt(argc, argv, "i:c:j:m:ft:l:w:k:hdu:")) != EOF) {
         switch (c) {
         case 'i':
             ctx->if_inj_name = strdup(optarg);
@@ -1163,6 +1154,9 @@ int main(int argc, char *argv[]) {
             break;
         case 'l':
             log_fn = strdup(optarg);
+            break;
+        case 'w':
+            ctx->pw_fn = strdup(optarg);
             break;
         case 'k':
             matchers_fn = strdup(optarg);

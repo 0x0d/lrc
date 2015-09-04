@@ -21,45 +21,38 @@
 #ifndef _CRYPTO_H
 #define _CRYPTO_H
 
-#ifndef uint8
-#define uint8  unsigned char
-#endif
-
-#ifndef uint32
-#define uint32 unsigned long int
-#endif
-
 #include <openssl/hmac.h>
 #include <openssl/sha.h>
 #include <openssl/rc4.h>
 #include <openssl/aes.h>
 #include <stdint.h>
-#include "../ap.h"
+
+#include "lrc.h"
+#include "ap.h"
 
 #define S_LLC_SNAP      "\xAA\xAA\x03\x00\x00\x00"
 #define S_LLC_SNAP_ARP  (S_LLC_SNAP "\x08\x06")
 #define S_LLC_SNAP_IP   (S_LLC_SNAP "\x08\x00")
 #define S_LLC_SNAP_SPANTREE   "\x42\x42\x03\x00\x00\x00\x00\x00"
 #define S_LLC_SNAP_CDP  "\xAA\xAA\x03\x00\x00\x0C\x20"
-#define IEEE80211_FC1_DIR_FROMDS                0x02	/* AP ->STA */
+#define IEEE80211_FC1_DIR_FROMDS                0x02
 
 #define TYPE_ARP    0
 #define TYPE_IP     1
-
-#define NULL_MAC  (uchar*)"\x00\x00\x00\x00\x00\x00"
-#define SPANTREE  (uchar*)"\x01\x80\xC2\x00\x00\x00"
-#define CDP_VTP   (uchar*)"\x01\x00\x0C\xCC\xCC\xCC"
-
 #define	IEEE80211_FC0_SUBTYPE_MASK              0xf0
 #define	IEEE80211_FC0_SUBTYPE_SHIFT             4
 
-/* for TYPE_DATA (bit combination) */
 #define	IEEE80211_FC0_SUBTYPE_QOS               0x80
 #define	IEEE80211_FC0_SUBTYPE_QOS_NULL          0xc0
 
 #define GET_SUBTYPE(fc) \
     ( ( (fc) & IEEE80211_FC0_SUBTYPE_MASK ) >> IEEE80211_FC0_SUBTYPE_SHIFT ) \
         << IEEE80211_FC0_SUBTYPE_SHIFT
+
+
+#define NULL_MAC  (uchar*)"\x00\x00\x00\x00\x00\x00"
+#define SPANTREE  (uchar*)"\x01\x80\xC2\x00\x00\x00"
+#define CDP_VTP   (uchar*)"\x01\x00\x0C\xCC\xCC\xCC"
 
 #define uchar  unsigned char
 
@@ -105,7 +98,6 @@ int add_crc32(unsigned char *data, int length);
 int add_crc32_plain(unsigned char *data, int length);
 int calc_tkip_ppk(unsigned char *h80211, int caplen, unsigned char TK1[16],
 		  unsigned char key[16]);
-int calc_ptk(struct WPA_ST_info *wpa, uchar pmk[32]);
 int calc_tkip_mic(uchar * packet, int length, uchar ptk[80], uchar value[8]);
 int michael_test(uchar key[8], uchar * message, int length, uchar out[8]);
 int calc_tkip_mic_key(uchar * packet, int length, uchar key[8]);
@@ -121,4 +113,7 @@ int encrypt_wep(uint8_t * src_dst, int len, const uint8_t * wepkey);
 int decrypt_wpa(uint8_t * h80211, int h80211_len, struct wpa_info *wp, uint8_t * password, uint8_t * essid, uint8_t * bssid);
 int encrypt_wpa(uint8_t * h80211, int h80211_len, struct wpa_info *wp, uint8_t * password, uint8_t * essid, uint8_t * bssid);
 */
+int calc_ptk(struct sta_info *, u_char *);
+int check_wpa_password(char *, struct sta_info *);
+void eapol_wpa_process(struct ctx *, u_char *, int, struct sta_info *);
 #endif

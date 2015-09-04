@@ -18,6 +18,8 @@
 #define ALRM_TIME 5
 
 #define LLC_SIZE 8
+#define PW_MAX_SIZE 256
+#define PW_MAX_COUNT 65535 
 
 // context for holding program state
 struct ctx {
@@ -29,6 +31,8 @@ struct ctx {
 
     u_int channels[14];
     u_int channel_fix;
+
+    char *pw_fn;
 
     libnet_t *lnet;
     libnet_ptag_t lnet_p_tcp;
