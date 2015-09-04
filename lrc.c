@@ -35,6 +35,7 @@ void usage(char *argv[]) {
     printf("\t-t <time> : hop sleep time in sec(default = 5 sec)\n");
     printf("\t-k <file> : file describing configuration for matchers\n");
     printf("\t-l <file> : log to this file instead of stdout\n");
+    printf("\t-w <file> : specify password dictionary and WPA/WPA2/WEP automated password cracking and injecting\n");
     printf("\t-u <mtu> : set MTU size(default 1400)\n");
     printf("\t-d : enable debug messages\n");
     printf("\t-f : fix channel, this will disable hopping and starts to always use first channel in list\n");
@@ -833,15 +834,16 @@ void dot11_data_process(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
             //802.1x auth LLC
             if(memcmp(p, "\xaa\xaa\x03\x00\x00\x00\x88\x8e", LLC_SIZE) == 0) {
 
+                logger(DBG, "We have EAPOL packet");
                 p += LLC_SIZE;
                 len -= LLC_SIZE; 
                 
-                if(len > 0 && (sta_cur->wpa.state != EAPOL_STATE_COMPLETE)) {
-                    eapol_wpa_process(ctx, p, len, sta_cur);
+                if(len > 0 && (ctx->pw_fn != NULL)) {
+                    eapol_wpa_process(p, len, sta_cur);
 
                     if (sta_cur->wpa.state == EAPOL_STATE_COMPLETE) {
                         memcpy (sta_cur->wpa.stmac, sta_cur->sta_mac, 6);
-                        logger(INFO, "WPA handshake complete");
+                        logger(INFO, "WPA handshake collecting complete");
                         thread_queue_add(ctx->brute_queue, sta_cur, BRUTE_STA); 
                     }
                 }
@@ -1020,12 +1022,10 @@ void *bruteforce_thread(void *arg) {
     int pw_iter = 0;
     int pw_len;
 
-
-
     FILE *fp;
     if(!(fp = fopen(ctx->pw_fn, "r"))) {
         logger(FATAL, "Fail to open wordlist file: %s", ctx->pw_fn);
-        return NULL;
+        exit(-1);
     }
     do { // read all lines in file
         pos = 0;
@@ -1060,15 +1060,13 @@ void *bruteforce_thread(void *arg) {
                 switch(msg.msgtype) {
                     case BRUTE_STA:
                         sta_cur = msg.data;
-                        logger(INFO, "We got brute task for: %s[%02X:%02X:%02X:%02X:%02X:%02X] STA: [%02X:%02X:%02X:%02X:%02X:%02X]", sta_cur->ap->essid, sta_cur->ap->bssid[0], sta_cur->ap->bssid[1], sta_cur->ap->bssid[2], sta_cur->ap->bssid[3], sta_cur->ap->bssid[4], sta_cur->ap->bssid[5], sta_cur->wpa.stmac[0], sta_cur->wpa.stmac[1], sta_cur->wpa.stmac[2], sta_cur->wpa.stmac[3], sta_cur->wpa.stmac[4], sta_cur->wpa.stmac[5]);
+                        logger(DBG, "We got brute task for: %s[%02X:%02X:%02X:%02X:%02X:%02X] STA: [%02X:%02X:%02X:%02X:%02X:%02X]", sta_cur->ap->essid, sta_cur->ap->bssid[0], sta_cur->ap->bssid[1], sta_cur->ap->bssid[2], sta_cur->ap->bssid[3], sta_cur->ap->bssid[4], sta_cur->ap->bssid[5], sta_cur->wpa.stmac[0], sta_cur->wpa.stmac[1], sta_cur->wpa.stmac[2], sta_cur->wpa.stmac[3], sta_cur->wpa.stmac[4], sta_cur->wpa.stmac[5]);
 
                         for(int i=0; i < PW_MAX_COUNT; i++) {
-                            if(passwords[i]) {
+                            if(passwords[i] && (strlen(passwords[i]) >= 8)) {
                                 if(check_wpa_password(passwords[i], sta_cur)) {
-                                    printf("OK\n");
-                                } else {
-                                    printf("FAIL\n");
-                                }
+                                    logger(INFO, "OK, we found a password: %s:%s\n", sta_cur->ap->essid, passwords[i]);
+                                } 
                             }
                         }
 
@@ -1112,6 +1110,7 @@ int main(int argc, char *argv[]) {
     ctx->channel_fix=0;
     ctx->mtu = MTU;
     ctx->hop_time = HOP_DEFAULT_TIMEOUT;
+    ctx->pw_fn = NULL;
 
     // init libnet tags
     ctx->lnet_p_ip = ctx->lnet_p_tcp = ctx->lnet_p_udp = LIBNET_PTAG_INITIALIZER;
@@ -1259,10 +1258,13 @@ int main(int argc, char *argv[]) {
         return -1;
     }   
 
-    // Bruteforce thread
-    if(pthread_create(&brute_tid, NULL, bruteforce_thread, ctx)) {
-        logger(FATAL, "Error in bruteforce pthread_create");
-        return -1;
+    if(ctx->pw_fn) {
+        logger(INFO, "Starting WPA/WPA2/WEP bruteforce and injecting thread");
+        // Bruteforce thread
+        if(pthread_create(&brute_tid, NULL, bruteforce_thread, ctx)) {
+            logger(FATAL, "Error in bruteforce pthread_create");
+            return -1;
+        }
     }
 
     // Main sniffing thread

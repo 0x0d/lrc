@@ -114,6 +114,7 @@ int decrypt_wpa(uint8_t * h80211, int h80211_len, struct wpa_info *wp, uint8_t *
 int encrypt_wpa(uint8_t * h80211, int h80211_len, struct wpa_info *wp, uint8_t * password, uint8_t * essid, uint8_t * bssid);
 */
 int calc_ptk(struct sta_info *, u_char *);
+int calc_ptk_orig( struct WPA_ST_info *wpa, unsigned char pmk[32] );
 int check_wpa_password(char *, struct sta_info *);
-void eapol_wpa_process(struct ctx *, u_char *, int, struct sta_info *);
+void eapol_wpa_process(u_char *, int, struct sta_info *);
 #endif

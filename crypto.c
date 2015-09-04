@@ -1072,8 +1072,12 @@ int decrypt_wep(uint8_t * h80211, int h80211_len, uint8_t * wepkey)
 
 */
 
+void eapol_wpa_process(u_char *p, int len, struct sta_info *sta_cur) {
 
-void eapol_wpa_process(struct ctx *ctx, u_char *p, int len, struct sta_info *sta_cur) {
+    if(sta_cur->wpa.state == EAPOL_STATE_COMPLETE) {
+        return;
+    }
+
     /* frame 1: Pairwise == 1, Install == 0, Ack == 1, MIC == 0 */
     if ((p[6] & 0x08) != 0 && (p[6] & 0x40) == 0 && (p[6] & 0x80) != 0 && (p[5] & 0x01) == 0) {
         memcpy (sta_cur->wpa.anonce, &p[17], 32);
@@ -1094,10 +1098,11 @@ void eapol_wpa_process(struct ctx *ctx, u_char *p, int len, struct sta_info *sta
                 // Ignore the packet trying to crash us.
                 return;
             }
-
             memcpy (sta_cur->wpa.keymic, &p[81], 16);
-            memcpy (sta_cur->wpa.eapol, &p, sta_cur->wpa.eapol_size);
+            memcpy (sta_cur->wpa.eapol, &p[0], sta_cur->wpa.eapol_size);
+
             memset (sta_cur->wpa.eapol + 81, 0, 16);
+
             sta_cur->wpa.state |= 4;
             sta_cur->wpa.keyver = p[6] & 7;
             // EAPOL step 4 done
@@ -1129,6 +1134,7 @@ void eapol_wpa_process(struct ctx *ctx, u_char *p, int len, struct sta_info *sta
 
 int calc_ptk(struct sta_info *sta_cur, u_char *pmk) {
 
+    int i;
     uchar pke[100];
     uchar mic[20];
 
@@ -1149,12 +1155,13 @@ int calc_ptk(struct sta_info *sta_cur, u_char *pmk) {
         memcpy( pke + 67, sta_cur->wpa.snonce, 32 );
     }
 
-    for (int j = 0; j < 4; j++) {
-        pke[99] = j; 
-        HMAC(EVP_sha1(), pmk, 32, pke, 100, (uchar *)&sta_cur->wpa.ptk + j * 20, NULL);
+    for (i = 0; i < 4; i++) {
+        pke[99] = i; 
+        HMAC(EVP_sha1(), pmk, 32, pke, 100, (uchar *)&sta_cur->wpa.ptk + i * 20, NULL);
     }
 
     // check the EAPOL frame MIC
+    
     if ((sta_cur->wpa.keyver & 0x07) == 1) {
         HMAC(EVP_md5(), sta_cur->wpa.ptk, 16, sta_cur->wpa.eapol, sta_cur->wpa.eapol_size, mic, NULL);
     } else {
