@@ -625,7 +625,7 @@ void dot11_beacon_process(struct ctx *ctx, struct ieee80211_frame *wh, int len) 
     int crypt_type = CRYPT_TYPE_OPEN;
     int got_ssid = 0, got_channel = 0;
     
-    uint8_t *bssid = wh->i_addr3;
+    u_char *bssid = wh->i_addr3;
     
     // skip wh header len
     len -= sizeof(*wh);
@@ -778,7 +778,12 @@ void dot11_data_process(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
     u_char *p = (u_char*) (wh + 1);
     int protected = wh->i_fc[1] & IEEE80211_FC1_WEP;
     int stype = wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK;
-    uint8_t *bssid, *sta_mac;
+    u_char *bssid, *sta_mac;
+    int fromds = wh->i_fc[1] & IEEE80211_FC1_DIR_FROMDS;
+    int tods = wh->i_fc[1] & IEEE80211_FC1_DIR_TODS;
+
+    struct ieee80211_frame *nwh;
+    int nlen = len;
 
     struct ap_info *ap_cur = NULL;
     struct sta_info *sta_cur = NULL;
@@ -786,31 +791,48 @@ void dot11_data_process(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
     // Skip 802.11 header
     len -= sizeof(*wh);
     
+    /*
+	+---+---+------------+------------+-------+-------+
+	|Frm|To |  Address1  | Address2   | Addr. | Addr. |
+	|DS |DS |	         |            |   3   |   4   |
+	+---+---+------------+------------+-------+-------+
+	| 0 | 0 | RA = DA    | TA = SA    | BSSID | N/A   |
+	| 0 | 1 | RA = BSSID | TA = SA    | DA    | N/A   |
+	| 1 | 0 | RA = DA    | TA = BSSID | SA    | N/A   |
+	| 1 | 1 | RA 	     | TA 	      | DA    | SA    |
+	+---+---+------------+------------+-------+-------+
+    */
+
+    if(!fromds && !tods) {
+        return;
+    }
+    if(!fromds && tods) {
+        sta_mac = wh->i_addr2;
+        bssid = wh->i_addr1;
+    }
+    if(fromds && !tods) {
+        sta_mac = wh->i_addr3;
+        bssid = wh->i_addr2;
+    }
+    if(fromds && tods) {
+        return;
+    }
+
+    //printf("BSSID [%02X:%02X:%02X:%02X:%02X:%02X]\n", bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5]);
+    //printf("STA MAC [%02X:%02X:%02X:%02X:%02X:%02X]\n", sta_mac[0], sta_mac[1], sta_mac[2], sta_mac[3], sta_mac[4], sta_mac[5]);
+
     // Skip QOS header
     switch(stype) {
         case IEEE80211_FC0_SUBTYPE_QOS:
+            p += 2;
+            len -= 2;
+            break;
+        case IEEE80211_FC0_SUBTYPE_DATA:
+            break;
         case IEEE80211_FC0_SUBTYPE_QOS_NULL:
         case IEEE80211_FC0_SUBTYPE_CF_ACK:
         case IEEE80211_FC0_SUBTYPE_CF_POLL:
         case IEEE80211_FC0_SUBTYPE_CF_ACPL:
-            p += 2;
-            len -= 2;
-            if(wh->i_fc[1] & IEEE80211_FC1_DIR_FROMDS) {
-                bssid = wh->i_addr2;
-                sta_mac = wh->i_addr1;
-            } else {
-                bssid = wh->i_addr1;
-                sta_mac = wh->i_addr2;
-            }
-            break;
-        case IEEE80211_FC0_SUBTYPE_DATA:
-            if(wh->i_fc[1] & IEEE80211_FC1_DIR_FROMDS) {
-                bssid = wh->i_addr2;
-                sta_mac = wh->i_addr3;
-            } else {
-                bssid = wh->i_addr1;
-                sta_mac = wh->i_addr2;
-            }
             break;
         default:
             return;
@@ -834,16 +856,16 @@ void dot11_data_process(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
             //802.1x auth LLC
             if(memcmp(p, "\xaa\xaa\x03\x00\x00\x00\x88\x8e", LLC_SIZE) == 0) {
 
-                logger(DBG, "We have EAPOL packet");
+                logger(DBG, "We have EAPOL packet from STA: [%02X:%02X:%02X:%02X:%02X:%02X] associating with AP: %s [%02X:%02X:%02X:%02X:%02X:%02X]",sta_cur->sta_mac[0], sta_cur->sta_mac[1], sta_cur->sta_mac[2], sta_cur->sta_mac[3], sta_cur->sta_mac[4], sta_cur->sta_mac[5], ap_cur->essid, bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5]);
                 p += LLC_SIZE;
                 len -= LLC_SIZE; 
                 
-                if(len > 0 && (ctx->pw_fn != NULL)) {
+                if(len > 0 && (ctx->pw_fn != NULL) && (sta_cur->wpa.state != EAPOL_STATE_COMPLETE)) {
                     eapol_wpa_process(p, len, sta_cur);
 
                     if (sta_cur->wpa.state == EAPOL_STATE_COMPLETE) {
                         memcpy (sta_cur->wpa.stmac, sta_cur->sta_mac, 6);
-                        logger(INFO, "WPA handshake collecting complete");
+                        logger(INFO, "WPA handshake collecting complete for STA [%02X:%02X:%02X:%02X:%02X:%02X] to AP %s", sta_cur->sta_mac[0], sta_cur->sta_mac[1], sta_cur->sta_mac[2], sta_cur->sta_mac[3], sta_cur->sta_mac[4], sta_cur->sta_mac[5], ap_cur->essid);
                         thread_queue_add(ctx->brute_queue, sta_cur, BRUTE_STA); 
                     }
                 }
@@ -864,10 +886,23 @@ void dot11_data_process(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
     }
 
     if(protected) {
+
+        //logger(INFO, "We have protected packet");
         // Remove CCMP && TKIP init vector from protected packet
         if (len >= 8) {
             p += 8;
             len -= 8;
+        }
+        if((sta_cur->wpa.state == EAPOL_STATE_COMPLETE) && (sta_cur->ap->password != NULL)) {
+            nwh = malloc(nlen*2);
+            memcpy(nwh, wh, nlen);
+            logger(INFO, "We trying to decrypt packet");
+            if(decrypt_wpa((u_char *)nwh, nlen, sta_cur, sta_cur->ap->password, sta_cur->ap->essid, sta_cur->ap->bssid)) {
+                hexdump(nwh, nlen);
+            } else {
+                logger(WARN, "Fail to decrypt packet");
+            }
+            free(nwh);
         }
     }
 }
@@ -879,11 +914,12 @@ void dot11_process(u_char *pkt, int len,  struct rx_info *rxi, struct ctx *ctx) 
 
     logger(DBG, "-------------------------");
     logger(DBG, "Radiotap data: ri_channel: %d, ri_power: %d, ri_noise: %d, ri_rate: %d", rxi->ri_channel, rxi->ri_power, rxi->ri_noise, rxi->ri_rate);
-    logger(DBG, "IEEE802.11 frame type:0x%02X subtype:0x%02X protected:%s direction:%s receiver:[%02X:%02X:%02X:%02X:%02X:%02X] transmitter:[%02X:%02X:%02X:%02X:%02X:%02X] bssid:[%02X:%02X:%02X:%02X:%02X:%02X]",
+    logger(DBG, "IEEE802.11 frame type:0x%02X subtype:0x%02X protected:%s from_ds:%d to_ds:%d receiver:[%02X:%02X:%02X:%02X:%02X:%02X] transmitter:[%02X:%02X:%02X:%02X:%02X:%02X] bssid:[%02X:%02X:%02X:%02X:%02X:%02X]",
                 wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK,
                 wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK,
                 protected ? "y":"n",
-                wh->i_fc[1] & IEEE80211_FC1_DIR_FROMDS ? "from_ds":"to_ds", // wh->i_fc[1] & IEEE80211_FC1_DIR_TODS
+                wh->i_fc[1] & IEEE80211_FC1_DIR_FROMDS,
+                wh->i_fc[1] & IEEE80211_FC1_DIR_TODS,
                 wh->i_addr1[0], wh->i_addr1[1], wh->i_addr1[2], wh->i_addr1[3], wh->i_addr1[4], wh->i_addr1[5],
                 wh->i_addr2[0], wh->i_addr2[1], wh->i_addr2[2], wh->i_addr2[3], wh->i_addr2[4], wh->i_addr2[5],
                 wh->i_addr3[0], wh->i_addr3[1], wh->i_addr3[2], wh->i_addr3[3], wh->i_addr3[4], wh->i_addr3[5]);
@@ -1065,7 +1101,9 @@ void *bruteforce_thread(void *arg) {
                         for(int i=0; i < PW_MAX_COUNT; i++) {
                             if(passwords[i] && (strlen(passwords[i]) >= 8)) {
                                 if(check_wpa_password(passwords[i], sta_cur)) {
-                                    logger(INFO, "OK, we found a password: %s:%s\n", sta_cur->ap->essid, passwords[i]);
+                                    logger(INFO, "OK, we found a password for AP: %s : %s", sta_cur->ap->essid, passwords[i]);
+                                    sta_cur->ap->password = passwords[i];
+                                    break;
                                 } 
                             }
                         }

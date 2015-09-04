@@ -4,25 +4,25 @@
 #include "lrc.h"
 
 struct ap_info {
-    uint8_t bssid[6];
+    u_char bssid[6];
 #define MAX_IE_ELEMENT_SIZE 256
-    uint8_t essid[MAX_IE_ELEMENT_SIZE];
+    u_char essid[MAX_IE_ELEMENT_SIZE];
 #define CRYPT_TYPE_OPEN 0
 #define CRYPT_TYPE_WEP 1
 #define CRYPT_TYPE_WPA 2
 #define CRYPT_TYPE_WPA_MGT 3
     int crypt_type;
-    uint16_t last_seq;
+    char *password;
     struct ap_info *next;
 };
 
 struct wpa_info{
-    uint8_t stmac[6];
-    uint8_t snonce[32];
-    uint8_t anonce[32];
-    uint8_t keymic[16];
-    uint8_t eapol[256];
-    unsigned char ptk[80];
+    u_char stmac[6];
+    u_char snonce[32];
+    u_char anonce[32];
+    u_char keymic[16];
+    u_char eapol[256];
+    u_char ptk[80];
     int eapol_size;
 #define EAPOL_VERSION_CCMP  2
 #define EAPOL_VERSION_TKIP  1
@@ -33,17 +33,16 @@ struct wpa_info{
 
 struct sta_info {
     struct ap_info *ap;
-    uint8_t sta_mac[6];
-    uint8_t qos_flag;
-    uint8_t qos_header[2];
+    u_char sta_mac[6];
+    u_char qos_flag;
+    u_char qos_header[2];
     struct wpa_info wpa;
-    uint16_t last_seq;
     struct sta_info *next;
 };
 
-int ap_add (struct ctx *, const uint8_t *, const char *, int);
-struct ap_info *ap_lookup (struct ctx *, const uint8_t *);
-struct sta_info *sta_lookup (struct ctx *, const uint8_t *);
-struct sta_info * sta_add (struct ctx *, const uint8_t *);
+int ap_add (struct ctx *, const u_char *, const char *, int);
+struct ap_info *ap_lookup (struct ctx *, const u_char *);
+struct sta_info *sta_lookup (struct ctx *, const u_char *);
+struct sta_info * sta_add (struct ctx *, const u_char *);
 
 #endif

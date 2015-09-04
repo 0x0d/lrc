@@ -60,6 +60,13 @@
 	( ((A) << (n)) | ( ((A)>>(32-(n))) & ( (1UL << (n)) - 1 ) ) )
 #define ROR32( A, n ) ROL32( (A), 32-(n) )
 
+#define EAPOL_PAIRWISE                0x08
+#define EAPOL_INSTALL                 0x40    
+#define EAPOL_ACK                     0x80
+#define EAPOL_MIC                     0x01
+
+#define EAPOL_KEY_VERSION   7
+
 struct WPA_ST_info {
 	struct WPA_ST_info *next;	/* next supplicant              */
 	uchar stmac[6];		/* supplicant MAC               */
@@ -114,7 +121,7 @@ int decrypt_wpa(uint8_t * h80211, int h80211_len, struct wpa_info *wp, uint8_t *
 int encrypt_wpa(uint8_t * h80211, int h80211_len, struct wpa_info *wp, uint8_t * password, uint8_t * essid, uint8_t * bssid);
 */
 int calc_ptk(struct sta_info *, u_char *);
-int calc_ptk_orig( struct WPA_ST_info *wpa, unsigned char pmk[32] );
 int check_wpa_password(char *, struct sta_info *);
 void eapol_wpa_process(u_char *, int, struct sta_info *);
+int decrypt_wpa(u_char *, int, struct sta_info *, char *, u_char *, u_char *);
 #endif

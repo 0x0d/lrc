@@ -888,76 +888,7 @@ int encrypt_ccmp(uchar * h80211, int caplen, uchar TK1[16])
 	memcpy(h80211 + offset, MIC, 8);
 	return 0;
 }
-/*
-int decrypt_wpa(uint8_t * h80211, int h80211_len, struct wpa_info *wp, uint8_t * password, uint8_t * essid, uint8_t * bssid) {
-    int z;
-	uchar pmk[40];
-	struct WPA_ST_info station;
-	struct WPA_ST_info *st;
-	st = &station;
-	memcpy(st->stmac, wp->stmac, sizeof(wp->stmac));
-	memcpy(st->snonce, wp->snonce, sizeof(wp->snonce));
-	memcpy(st->anonce, wp->anonce, sizeof(wp->anonce));
-	memcpy(st->keymic, wp->keymic, sizeof(wp->keymic));
-	memcpy(st->eapol, wp->eapol, sizeof(wp->eapol));
 
-	st->eapol_size = wp->eapol_size;
-	st->keyver = wp->keyver;
-	memcpy(st->bssid, bssid, 6);
-
-	if (check_crc_buf(h80211, h80211_len - 4) == 1) {
-		h80211_len = -4;
-	}
-	// check if data 
-	if ((h80211[0] & 0x0C) != 0x08) {
-		printf("\nNot a data packet!");
-		return 1;
-	}
-	// check minimum size 
-	z = ((h80211[1] & 3) != 3) ? 24 : 30;
-	if (z + 16 > (int)h80211_len)
-		return 1;
-	// check QoS header 
-	if (GET_SUBTYPE(h80211[0]) == IEEE80211_FC0_SUBTYPE_QOS) {
-		z += 2;
-	}
-
-	calc_pmk((char *)password, (char *)essid, pmk);
-
-	calc_ptk(st, pmk);
-
-	// check the SNAP header to see if data is encrypted 
-	// as unencrypted data begins with AA AA 03 00 00 00 
-	if (h80211[z] != h80211[z + 1] || h80211[z + 2] != 0x03) {
-
-		if (st->keyver == 1) {
-			if (decrypt_tkip(h80211, h80211_len, st->ptk + 32) == 1) {
-
-				h80211_len -= 20;
-
-			} else
-				return 1;
-		} else {
-
-			if (decrypt_ccmp(h80211, h80211_len, st->ptk + 32) == 1) {
-
-				h80211_len -= 16;
-
-			} else
-				return 1;
-
-		}
-		// st data packet was successfully decrypted,
-		//  remove the st Ext.IV & MIC, write the data
-		//memcpy(h80211 + z, h80211 + z + 8, h80211_len - z);
-        //
-		h80211[1] &= 0xBF;
-	}
-
-	return 0;
-
-}
-*/
 /*
 int encrypt_wpa(uint8_t * h80211, int h80211_len, struct wpa_info *wp,
 		uint8_t * password, uint8_t * essid, uint8_t * bssid)
@@ -1079,13 +1010,21 @@ void eapol_wpa_process(u_char *p, int len, struct sta_info *sta_cur) {
     }
 
     /* frame 1: Pairwise == 1, Install == 0, Ack == 1, MIC == 0 */
-    if ((p[6] & 0x08) != 0 && (p[6] & 0x40) == 0 && (p[6] & 0x80) != 0 && (p[5] & 0x01) == 0) {
+    if ((p[6] & EAPOL_PAIRWISE) != 0 && 
+        (p[6] & EAPOL_INSTALL) == 0 && 
+        (p[6] & EAPOL_ACK) != 0 && 
+        (p[5] & EAPOL_MIC) == 0) {
+        
         memcpy (sta_cur->wpa.anonce, &p[17], 32);
         sta_cur->wpa.state = 1;
         // EAPOL step 1 done
     }
     /* frame 2 or 4: Pairwise == 1, Install == 0, Ack == 0, MIC == 1 */
-    if ((p[6] & 0x08) != 0 && (p[6] & 0x40) == 0 && (p[6] & 0x80) == 0 && (p[5] & 0x01) != 0) {
+    if ((p[6] & EAPOL_PAIRWISE) != 0 && 
+        (p[6] & EAPOL_INSTALL) == 0 && 
+        (p[6] & EAPOL_ACK) == 0 && 
+        (p[5] & EAPOL_MIC) != 0) {
+
         if (memcmp (&p[17], ZERO, 32) != 0) {
             memcpy (sta_cur->wpa.snonce, &p[17], 32);
             sta_cur->wpa.state |= 2;
@@ -1100,16 +1039,20 @@ void eapol_wpa_process(u_char *p, int len, struct sta_info *sta_cur) {
             }
             memcpy (sta_cur->wpa.keymic, &p[81], 16);
             memcpy (sta_cur->wpa.eapol, &p[0], sta_cur->wpa.eapol_size);
-
             memset (sta_cur->wpa.eapol + 81, 0, 16);
 
+            sta_cur->wpa.keyver = p[6] & EAPOL_KEY_VERSION;
+
             sta_cur->wpa.state |= 4;
-            sta_cur->wpa.keyver = p[6] & 7;
             // EAPOL step 4 done
         }
     }
     /* frame 3: Pairwise == 1, Install == 1, Ack == 1, MIC == 1 */
-    if ((p[6] & 0x08) != 0 && (p[6] & 0x40) != 0 && (p[6] & 0x80) != 0 && (p[5] & 0x01) != 0) {
+    if ((p[6] & EAPOL_PAIRWISE) != 0 && 
+        (p[6] & EAPOL_INSTALL) != 0 && 
+        (p[6] & EAPOL_ACK) != 0 && 
+        (p[5] & EAPOL_MIC) != 0) {
+
         if (memcmp (&p[17], ZERO, 32) != 0) {
             memcpy (sta_cur->wpa.anonce, &p[17], 32);
             sta_cur->wpa.state |= 1;
@@ -1124,8 +1067,9 @@ void eapol_wpa_process(u_char *p, int len, struct sta_info *sta_cur) {
             memcpy (sta_cur->wpa.keymic, &p[81], 16);
             memcpy (sta_cur->wpa.eapol, &p, sta_cur->wpa.eapol_size);
             memset (sta_cur->wpa.eapol + 81, 0, 16);
+            sta_cur->wpa.keyver = p[6] & EAPOL_KEY_VERSION;
+
             sta_cur->wpa.state |= 4;
-            sta_cur->wpa.keyver = p[6] & 7;
             // EAPOL step 4 done
         }
     }
@@ -1161,7 +1105,6 @@ int calc_ptk(struct sta_info *sta_cur, u_char *pmk) {
     }
 
     // check the EAPOL frame MIC
-    
     if ((sta_cur->wpa.keyver & 0x07) == 1) {
         HMAC(EVP_md5(), sta_cur->wpa.ptk, 16, sta_cur->wpa.eapol, sta_cur->wpa.eapol_size, mic, NULL);
     } else {
@@ -1173,7 +1116,59 @@ int calc_ptk(struct sta_info *sta_cur, u_char *pmk) {
 
 int check_wpa_password(char *password, struct sta_info *sta_cur) {
 
-    u_char pmk[128];
+    u_char pmk[40];
     calc_pmk(password, (char *)&sta_cur->ap->essid, pmk);
     return calc_ptk(sta_cur, pmk);
+}
+
+int decrypt_wpa(u_char *h80211, int h80211_len, struct sta_info *sta_cur, char *password, u_char *essid, u_char *bssid) {
+    int z;
+	uchar pmk[40];
+
+	if (check_crc_buf(h80211, h80211_len - 4) == 1) {
+		h80211_len = -4;
+	}
+
+	// check if data 
+	if ((h80211[0] & 0x0C) != 0x08) {
+		return 0;
+	}
+	// check minimum size 
+	z = ((h80211[1] & 3) != 3) ? 24 : 30;
+	if (z + 16 > (int)h80211_len) {
+		return 0;
+    }
+
+	// check QoS header 
+	if (GET_SUBTYPE(h80211[0]) == IEEE80211_FC0_SUBTYPE_QOS) {
+		z += 2;
+	}
+
+	calc_pmk((char *)password, (char *)essid, pmk);
+	calc_ptk(sta_cur, pmk);
+
+	// check the SNAP header to see if data is encrypted 
+	// as unencrypted data begins with AA AA 03 00 00 00 
+	if (h80211[z] != h80211[z + 1] || h80211[z + 2] != 0x03) {
+		if (sta_cur->wpa.keyver == 1) {
+			if (decrypt_tkip(h80211, h80211_len, sta_cur->wpa.ptk + 32) == 1) {
+				h80211_len -= 20;
+			} else
+				return 0;
+		} else {
+
+			if (decrypt_ccmp(h80211, h80211_len, sta_cur->wpa.ptk + 32) == 1) {
+				h80211_len -= 16;
+			} else
+				return 0;
+		}
+		// st data packet was successfully decrypted,
+		//  remove the st Ext.IV & MIC, write the data
+		//memcpy(h80211 + z, h80211 + z + 8, h80211_len - z);
+        //
+		//h80211[1] &= 0xBF;
+	}
+
+	return h80211_len;
+
 }
