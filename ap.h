@@ -12,6 +12,7 @@ struct ap_info {
 #define CRYPT_TYPE_WPA 2
 #define CRYPT_TYPE_WPA_MGT 3
     int crypt_type;
+    int channel;
     char *password;
     struct ap_info *next;
 };
@@ -27,6 +28,7 @@ struct wpa_info{
 #define EAPOL_VERSION_CCMP  2
 #define EAPOL_VERSION_TKIP  1
     int keyver;
+#define EAPOL_STATE_PROCESSING 10
 #define EAPOL_STATE_COMPLETE    7
     int state;
 };
@@ -40,7 +42,7 @@ struct sta_info {
     struct sta_info *next;
 };
 
-int ap_add (struct ctx *, const u_char *, const char *, int);
+int ap_add (struct ctx *, const u_char *, const char *, int, int);
 struct ap_info *ap_lookup (struct ctx *, const u_char *);
 struct sta_info *sta_lookup (struct ctx *, const u_char *);
 struct sta_info * sta_add (struct ctx *, const u_char *);

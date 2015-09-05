@@ -68,7 +68,21 @@ void hexdump (void *addr, u_int len) {
     printf ("  %s\n", buff);
 }
 
-
+void print_sta(struct sta_info *sta) {
+    printf("stmac------------\n");
+    hexdump(sta->wpa.stmac, 6);
+    printf("anonce------------\n");
+    hexdump(sta->wpa.anonce, 32); 
+    printf("eapol------------\n");
+    hexdump(sta->wpa.eapol, 256);
+    printf("keymic------------\n");
+    hexdump(sta->wpa.keymic, 16); 
+    printf("snonce------------\n");
+    hexdump(sta->wpa.snonce, 32); 
+    printf("eapol_size------------\n");
+    printf("%d\n", sta->wpa.eapol_size);
+    printf("------------\n");
+}
 
 int main(int argc, char **argv)
 {
@@ -105,23 +119,13 @@ int main(int argc, char **argv)
     memcpy(sta->wpa.stmac, ostmac, 6);
     memcpy(sta->ap->bssid, obssid, 6);
     eapol_wpa_process(pkt1, 99, sta);
+    print_sta(sta);
     eapol_wpa_process(pkt2, 121, sta);
+    print_sta(sta);
     eapol_wpa_process(pkt3, 155, sta);
+    print_sta(sta);
     eapol_wpa_process(pkt4, 99, sta);
-   
-    printf("stmac------------\n");
-    hexdump(sta->wpa.stmac, 6);
-    printf("anonce------------\n");
-    hexdump(sta->wpa.anonce, 32); 
-    printf("eapol------------\n");
-    hexdump(sta->wpa.eapol, 256);
-    printf("keymic------------\n");
-    hexdump(sta->wpa.keymic, 16); 
-    printf("snonce------------\n");
-    hexdump(sta->wpa.snonce, 32); 
-    printf("eapol_size------------\n");
-    printf("%d\n", sta->wpa.eapol_size);
-    printf("------------\n");
+    print_sta(sta);
 
  //  unsigned char pmk[32];  // ???????????????
 

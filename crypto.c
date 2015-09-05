@@ -1005,10 +1005,6 @@ int decrypt_wep(uint8_t * h80211, int h80211_len, uint8_t * wepkey)
 
 void eapol_wpa_process(u_char *p, int len, struct sta_info *sta_cur) {
 
-    if(sta_cur->wpa.state == EAPOL_STATE_COMPLETE) {
-        return;
-    }
-
     /* frame 1: Pairwise == 1, Install == 0, Ack == 1, MIC == 0 */
     if ((p[6] & EAPOL_PAIRWISE) != 0 && 
         (p[6] & EAPOL_INSTALL) == 0 && 
@@ -1019,6 +1015,7 @@ void eapol_wpa_process(u_char *p, int len, struct sta_info *sta_cur) {
         sta_cur->wpa.state = 1;
         // EAPOL step 1 done
     }
+
     /* frame 2 or 4: Pairwise == 1, Install == 0, Ack == 0, MIC == 1 */
     if ((p[6] & EAPOL_PAIRWISE) != 0 && 
         (p[6] & EAPOL_INSTALL) == 0 && 
@@ -1164,7 +1161,7 @@ int decrypt_wpa(u_char *h80211, int h80211_len, struct sta_info *sta_cur, char *
 		}
 		// st data packet was successfully decrypted,
 		//  remove the st Ext.IV & MIC, write the data
-		//memcpy(h80211 + z, h80211 + z + 8, h80211_len - z);
+		memcpy(h80211 + z, h80211 + z + 8, h80211_len - z);
         //
 		//h80211[1] &= 0xBF;
 	}

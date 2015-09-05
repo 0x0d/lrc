@@ -18,7 +18,7 @@ struct ap_info *ap_lookup(struct ctx *ctx, const u_char *bssid) {
 }
 
 
-int ap_add (struct ctx *ctx, const u_char *bssid, const char *essid, int crypt_type) {
+int ap_add (struct ctx *ctx, const u_char *bssid, const char *essid, int crypt_type, int channel) {
 
     struct ap_info *ap_cur;
 
@@ -26,7 +26,7 @@ int ap_add (struct ctx *ctx, const u_char *bssid, const char *essid, int crypt_t
         return 0;
     }
 
-    logger(INFO, "Adding new AP [%02X:%02X:%02X:%02X:%02X:%02X] %s Crypt: %d", bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5], essid, crypt_type);
+    logger(INFO, "Adding new AP [%02X:%02X:%02X:%02X:%02X:%02X] %s Crypt: %d Channel: %d", bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5], essid, crypt_type, channel);
 
     ap_cur = (struct ap_info *) malloc (sizeof (struct ap_info));
     if (!ap_cur) {
