@@ -2,7 +2,6 @@
 #define __LRC_H__
 
 #include <libnet.h>
-#include <pcap.h>
 #include <pthread.h>
 
 #define PLATFORM_LINUX 1

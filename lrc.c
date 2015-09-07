@@ -236,7 +236,7 @@ int build_dot11_packet(u_char *l2data, u_int l2datalen, u_char *wldata, u_int *w
 
     /* seq */
     sp = (u_short*) wh->i_seq;
-    *sp = fnseq(0, 1337); // We do not care about this field value too.
+    *sp = fnseq(0, 1337); // We do not care about this field value too. But maybe we need?
 
     wh->i_fc[0] |= IEEE80211_FC0_TYPE_DATA | IEEE80211_FC0_SUBTYPE_DATA;
     wh->i_fc[1] |= IEEE80211_FC1_DIR_FROMDS;
@@ -553,7 +553,7 @@ int parse_elem_vendor(u_char *e, int l)
     return parse_rsn((u_char*) &wpa->wpa_version, l - 6, 0);
 }
 
-void dot11_beacon_process(struct ctx *ctx, struct ieee80211_frame *wh, int len)
+void dot11_beacon_process(struct ctx *ctx, struct rx_info *rxi, struct ieee80211_frame *wh, int len)
 {
 
     ieee80211_mgt_beacon_t wb = (ieee80211_mgt_beacon_t) (wh+1);
@@ -563,21 +563,23 @@ void dot11_beacon_process(struct ctx *ctx, struct ieee80211_frame *wh, int len)
     int ie_type;
     u_char ie_len;
     char ssid[MAX_IE_ELEMENT_SIZE];
-    int channel = 0;
+    int channel = rxi->ri_channel;
     int crypt_type = CRYPT_TYPE_OPEN;
-    int got_ssid = 0, got_channel = 0;
+    int got_ssid = 0;
 
     u_char *bssid = wh->i_addr3;
 
-    // skip wh header len
+    // skip 802.11 header len
     len -= sizeof(*wh);
 
     if((IEEE80211_BEACON_CAPABILITY(wb) & IEEE80211_CAPINFO_PRIVACY)) {
         crypt_type = CRYPT_TYPE_WEP;
     }
 
-    wb += fix_len; // skip fixed params
+    // skip fixed parameters(12 bytes)
+    wb += fix_len; 
     len -= fix_len;
+
 
     if(len < 0) {
         logger(WARN, "Too short beacon frame");
@@ -602,18 +604,23 @@ void dot11_beacon_process(struct ctx *ctx, struct ieee80211_frame *wh, int len)
                 got_ssid = 1;
             }
             break;
+
+// This code sometimes work, sometimes not. 5Gz beacons doesn`t contain channel info. Better to use rxi->ri_channel
+/*
         case IEEE80211_ELEMID_DSPARMS:
             if (!got_channel)
                 channel = wb[2];
             got_channel = 1;
             break;
-
+*/
+        // sometimes, encryption information contains in vendor field
         case IEEE80211_ELEMID_VENDOR:
             if((rc = parse_elem_vendor(wb, ie_len + 2))) {
                 crypt_type = rc;
             }
             break;
 
+        // but often in RSN field
         case IEEE80211_ELEMID_RSN:
             if((rc = parse_rsn(&wb[2], ie_len, 1))) {
                 crypt_type = rc;
@@ -621,12 +628,13 @@ void dot11_beacon_process(struct ctx *ctx, struct ieee80211_frame *wh, int len)
             break;
         }
 
+        // skip to the next tag
         wb += 2 + ie_len;
         len -= 2 + ie_len;
 
     }
 
-    if (got_ssid && got_channel) {
+    if (got_ssid) {
         logger(DBG, "SSID: %s Channel: %d", ssid, channel);
         switch(crypt_type) {
         case CRYPT_TYPE_WEP:
@@ -650,7 +658,7 @@ void dot11_beacon_process(struct ctx *ctx, struct ieee80211_frame *wh, int len)
     }
 }
 
-void dot11_mgt_process(struct ctx *ctx, struct ieee80211_frame *wh, int len)
+void dot11_mgt_process(struct ctx *ctx, struct rx_info *rxi, struct ieee80211_frame *wh, int len)
 {
 
     if (len < (int) sizeof(*wh)) {
@@ -663,7 +671,7 @@ void dot11_mgt_process(struct ctx *ctx, struct ieee80211_frame *wh, int len)
     case IEEE80211_FC0_SUBTYPE_BEACON:
     case IEEE80211_FC0_SUBTYPE_PROBE_RESP:
         logger(DBG, "Management beacon or probe response frame");
-        dot11_beacon_process(ctx, wh, len);
+        dot11_beacon_process(ctx, rxi,  wh, len);
         break;
 
     case IEEE80211_FC0_SUBTYPE_AUTH:
@@ -695,7 +703,7 @@ void dot11_mgt_process(struct ctx *ctx, struct ieee80211_frame *wh, int len)
 
 }
 
-void dot11_ctl_process(struct ctx *ctx, struct ieee80211_frame *wh, int len)
+void dot11_ctl_process(struct ctx *ctx, struct rx_info *rxi, struct ieee80211_frame *wh, int len)
 {
     switch (wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK) {
     case IEEE80211_FC0_SUBTYPE_ACK:
@@ -717,7 +725,7 @@ void dot11_ctl_process(struct ctx *ctx, struct ieee80211_frame *wh, int len)
 }
 
 
-void dot11_data_process(struct ctx *ctx, struct ieee80211_frame *wh, int len, int cleared)
+void dot11_data_process(struct ctx *ctx, struct rx_info *rxi, struct ieee80211_frame *wh, int len, int cleared)
 {
 
     u_char *p = (u_char*) (wh + 1);
@@ -894,17 +902,17 @@ void dot11_process(u_char *pkt, int len,  struct rx_info *rxi, struct ctx *ctx)
     switch (wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) {
     case IEEE80211_FC0_TYPE_MGT: // management frame
         logger(DBG, "Management frame");
-        dot11_mgt_process(ctx, wh, len);
+        dot11_mgt_process(ctx, rxi, wh, len);
         break;
 
     case IEEE80211_FC0_TYPE_CTL: // control frame
         logger(DBG, "Control frame");
-        dot11_ctl_process(ctx, wh, len);
+        dot11_ctl_process(ctx, rxi, wh, len);
         break;
 
     case IEEE80211_FC0_TYPE_DATA: //data frame
         logger(DBG, "Data frame");
-        dot11_data_process(ctx, wh, len, 0);
+        dot11_data_process(ctx, rxi, wh, len, 0);
         break;
     default:
         logger(DBG, "Unknown frame type: 0x%02X", wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK);
@@ -1095,8 +1103,27 @@ void *bruteforce_thread(void *arg)
     return NULL;
 }
 
-/* parse a string, for example "1,2,3-7,11" */
+int invalid_channel(int chan)
+{
+    int i=0; 
 
+    do {    
+        if (chan == bg_chans[i] && chan != 0 ) {
+            return 0;
+        }
+    } while (bg_chans[++i]);
+
+    do {    
+        if (chan == a_chans[i] && chan != 0 ) {
+            return 0;
+        }
+    } while (a_chans[++i]);
+
+    return 1;
+}
+
+
+// parse a string, for example "1,2,3-7,11" 
 int parse_channels(const char *optarg, u_int *channels)
 {
     int i=0,chan_cur=0,chan_first=0,chan_last=0,chan_max=128,chan_remain=0;
@@ -1139,8 +1166,7 @@ int parse_channels(const char *optarg, u_int *channels)
                         return 0;
                     }
                     for(i=chan_first; i<=chan_last; i++) {
-                        //if( (! invalid_channel(i)) && (chan_remain > 0) )
-                        if( chan_remain > 0) {
+                        if( (! invalid_channel(i)) && (chan_remain > 0) ) {
                             tmp_channels[chan_max-chan_remain]=i;
                             chan_remain--;
                         }
@@ -1167,8 +1193,7 @@ int parse_channels(const char *optarg, u_int *channels)
             }
 
             if( sscanf(token, "%d", &chan_cur) != EOF) {
-                //if( (! invalid_channel(chan_cur)) && (chan_remain > 0) )
-                if(chan_remain > 0) {
+                if( (! invalid_channel(chan_cur)) && (chan_remain > 0) ) {
                     tmp_channels[chan_max-chan_remain]=chan_cur;
                     chan_remain--;
                 }
@@ -1180,8 +1205,6 @@ int parse_channels(const char *optarg, u_int *channels)
             }
         }
     }
-
-    //G.own_channels = (int*) malloc(sizeof(int)*(chan_max - chan_remain + 1));
 
     for(i=0; i<(chan_max - chan_remain); i++) {
         channels[i] = tmp_channels[i];

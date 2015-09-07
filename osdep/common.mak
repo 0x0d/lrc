@@ -145,16 +145,6 @@ ifeq ($(GCC_OVER49), 0)
 endif
 
 
-ifeq ($(GCC_OVER49), 0)
-	ifeq ($(GCC_OVER41), 1)
-		COMMON_CFLAGS += -fstack-protector
-	endif
-endif
-
-ifeq ($(GCC_OVER49), 1)
-	COMMON_CFLAGS += -fstack-protector-strong
-endif
-
 ifeq ($(GCC_OVER45), 1)
 	CFLAGS		+= -Wno-unused-but-set-variable -Wno-array-bounds
 endif
