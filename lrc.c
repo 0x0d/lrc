@@ -25,24 +25,36 @@
 int dead = 0;
 int debugged = 0; 
 
+int bg_chans [] = {
+    1, 7, 13, 2, 8, 3, 14, 9, 4, 10, 5, 11, 6, 12, 0
+};
+
+int a_chans [] =
+{
+    36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108,
+    112, 116, 120, 124, 128, 132, 136, 140, 149,
+    153, 157, 161, 184, 188, 192, 196, 200, 204,
+    208, 212, 216,0
+};
+
 void usage(char *argv[]) {
-    printf("usage: %s -k <matchers file> [options]", argv[0]);
+    printf("usage: %s [options]", argv[0]);
     printf("\nInterface options:\n");
-    printf("\t-i <iface> : sets the listen/inject interface\n");
-    printf("\t-m <iface> : sets the monitor interface\n");
-    printf("\t-j <iface> : sets the inject interface\n");
-    printf("\t-c <channels> : sets the channels for hopping(or not, if fix defined)\n");
-    printf("\t-t <time> : hop sleep time in sec(default = 5 sec)\n");
-    printf("\t-k <file> : file describing configuration for matchers\n");
-    printf("\t-l <file> : log to this file instead of stdout\n");
-    printf("\t-w <file> : specify password dictionary and WPA/WPA2/WEP automated password cracking and injecting\n");
-    printf("\t-u <mtu> : set MTU size(default 1400)\n");
-    printf("\t-d : enable debug messages\n");
-    printf("\t-f : fix channel, this will disable hopping and starts to always use first channel in list\n");
+    printf("\t-i, --interface <iface>\t\t: sets the listen/inject interface\n");
+    printf("\t-m, --monitor <iface>\t\t: sets the monitor interface\n");
+    printf("\t-j, --inject <iface>\t\t: sets the inject interface\n");
+    printf("\t-c, --channels <channels>\t: sets the channels for hopping(or not, if fix defined)\n");
+    printf("\t-t, --timeout <time>\t\t: hop sleep time in milliseconds(default = 5 sec/5000 millisec)\n");
+    printf("\t-k, --matchers <file>\t\t: file describing configuration for matchers\n");
+    printf("\t-l, --log <file>\t\t: log to this file instead of stdout\n");
+    printf("\t-w, --wordlist <file>\t\t: specify password dictionary and WPA/WPA2/WEP automated password cracking and injecting\n");
+    printf("\t-u, --mtu <mtu>\t\t\t: set MTU size(default 1400)\n");
+    printf("\t-d, --debug\t\t\t: enable debug messages\n");
     printf("\n");
     printf("Example(for single interface): %s -i wlan0 -c 1,6,11\n", argv[0]);
     printf("Example(for dual interfaces): %s -m wlan0 -j wlan1 -c 1,6,11\n", argv[0]);
     printf("Example(for single interface and channel fix): %s -i wlan0 -c 9 -f\n", argv[0]);
+    printf("Example(for single interface and WPA/WEP inject): %s -i wlan0 -c 1,5 -t 5 -w <wordlist>\n", argv[0]);
     printf("\n");
     exit(0);
 }
@@ -102,89 +114,6 @@ void hexdump (void *addr, u_int len) {
     printf ("  %s\n", buff);
 }
 
-struct matcher_entry *matchers_match(const char *data, int datalen, struct ctx *ctx, u_int proto, u_int src_port, u_int dst_port) {
-    struct matcher_entry *matcher;
-    int ovector[30];
-
-    for(matcher = ctx->matchers_list; matcher != NULL; matcher = matcher->next) {
-        if(matcher->proto != MATCHER_PROTO_ANY && matcher->proto != proto) {
-            continue;
-        }
-        if((matcher->dst_port > 0 && matcher->dst_port != dst_port) || (matcher->src_port > 0 && matcher->src_port != src_port)) {
-            continue;
-        }
-        if(pcre_exec(matcher->match, NULL, data, datalen,  0, 0, ovector, 30) > 0) {
-            logger(INFO, "Matched pattern for '%s'", matcher->name);
-            if(matcher->ignore && pcre_exec(matcher->ignore, NULL, data, datalen, 0, 0, ovector, 30) > 0) {
-                logger(INFO, "Matched ignore for '%s'", matcher->name);
-                continue;
-            } else {
-                return matcher;
-            }
-        }
-    }
-    return NULL;
-}
-
-struct matcher_entry *get_response(u_char *data, u_int datalen, struct ctx *ctx, u_int type, u_int src_port, u_int dst_port) {
-
-    struct matcher_entry *matcher;
-
-    #ifdef HAVE_PYTHON
-    PyObject *args;
-    PyObject *value;
-    Py_ssize_t rdatalen;
-    char *rdata;
-    #endif
-
-    if(!(matcher = matchers_match((const char *)data, datalen, ctx, type, src_port, dst_port))) {
-        logger(DBG, "No matchers found for data");
-        return NULL;
-    }
-
-    #ifdef HAVE_PYTHON
-    if(matcher->pyfunc) {
-        logger(DBG, "We have a Python code to construct response");
-        args = PyTuple_New(2);
-        PyTuple_SetItem(args,0,PyString_FromStringAndSize((const char *)data, datalen)); // here is data
-        PyTuple_SetItem(args,1,PyInt_FromSsize_t(datalen));
-
-        value = PyObject_CallObject(matcher->pyfunc, args);
-        if(value == NULL) {
-            PyErr_Print();
-            logger(WARN, "Python function returns no data!");
-            return NULL;
-        }
-
-        rdata = PyString_AsString(value);
-        rdatalen = PyString_Size(value);
-
-        if(rdata != NULL && rdatalen > 0) {
-            matcher->response_len = (u_int) rdatalen;
-            if(matcher->response) {
-                // We already have previous response, free it
-                free(matcher->response);
-            }
-            matcher->response = malloc(matcher->response_len);
-            memcpy(matcher->response, (u_char *) rdata, rdatalen);
-        } else {
-            PyErr_Print();
-            logger(WARN, "Python cannot convert return string");
-            return NULL;
-        }
-        return matcher;
-    }
-    #endif
-    
-    if(matcher->response) {
-        logger(DBG, "We have a plain text response");
-        return matcher;
-    }
-
-    logger(WARN, "There is no response data!");
-    return NULL;
-
-}
 
 int build_tcp_packet(struct iphdr *ip_hdr, struct tcphdr *tcp_hdr, u_char *data, u_int datalen, u_int tcpflags, u_int seqnum, struct ctx *ctx) {
 
@@ -425,7 +354,7 @@ void ip_packet_process(const u_char *dot3, u_int dot3_len, struct ieee80211_fram
         }
         tcp_data = (u_char*) tcp_hdr + tcp_hdr->doff * 4;
 
-        if((matcher = get_response(tcp_data, tcp_datalen, ctx, MATCHER_PROTO_TCP, ntohs(tcp_hdr->source), ntohs(tcp_hdr->dest)))) {
+        if((matcher = matchers_get_response(tcp_data, tcp_datalen, ctx, MATCHER_PROTO_TCP, ntohs(tcp_hdr->source), ntohs(tcp_hdr->dest)))) {
             logger(INFO, "Matched %s TCP packet %s:%d -> %s:%d len:%d", matcher->name, src_ip, ntohs(tcp_hdr->source), dst_ip, ntohs(tcp_hdr->dest), tcp_datalen);
 
             tcpseqnum = ntohl(tcp_hdr->ack_seq);
@@ -483,7 +412,7 @@ void ip_packet_process(const u_char *dot3, u_int dot3_len, struct ieee80211_fram
         }
         udp_data = (u_char*) udp_hdr + sizeof(struct udphdr);
 
-        if((matcher = get_response(udp_data, udp_datalen, ctx, MATCHER_PROTO_UDP, ntohs(udp_hdr->source), ntohs(udp_hdr->dest)))) {
+        if((matcher = matchers_get_response(udp_data, udp_datalen, ctx, MATCHER_PROTO_UDP, ntohs(udp_hdr->source), ntohs(udp_hdr->dest)))) {
             logger(INFO, "Matched %s UDP packet %s:%d -> %s:%d len:%d", matcher->name, src_ip, ntohs(udp_hdr->source), dst_ip, ntohs(udp_hdr->dest), udp_datalen);
 
             for(frag_offset = 0; frag_offset < matcher->response_len; frag_offset += ctx->mtu) {
@@ -621,7 +550,7 @@ void dot11_beacon_process(struct ctx *ctx, struct ieee80211_frame *wh, int len) 
     int ie_type;
     u_char ie_len;
     char ssid[MAX_IE_ELEMENT_SIZE];
-    int channel;
+    int channel = 0;
     int crypt_type = CRYPT_TYPE_OPEN;
     int got_ssid = 0, got_channel = 0;
     
@@ -778,7 +707,7 @@ void dot11_data_process(struct ctx *ctx, struct ieee80211_frame *wh, int len, in
     u_char *p = (u_char*) (wh + 1);
     int protected = wh->i_fc[1] & IEEE80211_FC1_WEP;
     int stype = wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK;
-    u_char *bssid, *sta_mac;
+    u_char *bssid = NULL, *sta_mac = NULL;
     int fromds = wh->i_fc[1] & IEEE80211_FC1_DIR_FROMDS;
     int tods = wh->i_fc[1] & IEEE80211_FC1_DIR_TODS;
 
@@ -1037,9 +966,9 @@ void *channel_thread(void *arg) {
 
     u_int ch_c;
 
-    if(ctx->channel_fix) {
-        // set first in array
-        logger(INFO, "Default channel set: %d", ctx->channels[0]);
+    // Check if we have only one channel set
+    if(ctx->channels[1] == 0) {
+        logger(INFO, "Fixed channel set: %d", ctx->channels[0]);
 
         if(!channel_change(ctx, ctx->channels[0])) {
             return NULL;
@@ -1058,7 +987,7 @@ void *channel_thread(void *arg) {
                 if(!channel_change(ctx, ctx->channels[ch_c])) {
                     return NULL;
                 }
-                sleep(ctx->hop_time);
+                usleep(ctx->hop_time*1000);
             }
         }
     }
@@ -1144,17 +1073,139 @@ void *bruteforce_thread(void *arg) {
     return NULL;
 }
 
+/* parse a string, for example "1,2,3-7,11" */
+
+int parse_channels(const char *optarg, u_int *channels) {
+    unsigned int i=0,chan_cur=0,chan_first=0,chan_last=0,chan_max=128,chan_remain=0;
+    char *optchan = NULL, *optc;
+    char *token = NULL;
+    int *tmp_channels;
+
+    //got a NULL pointer?
+    if(optarg == NULL)
+        return 0;
+
+    chan_remain=chan_max;
+
+    //create a writable string
+    optc = optchan = (char*) malloc(strlen(optarg)+1);
+    strncpy(optchan, optarg, strlen(optarg));
+    optchan[strlen(optarg)]='\0';
+
+    tmp_channels = (int*) malloc(sizeof(int)*(chan_max+1));
+
+    //split string in tokens, separated by ','
+    while( (token = strsep(&optchan,",")) != NULL)
+    {
+        //range defined?
+        if(strchr(token, '-') != NULL)
+        {
+            //only 1 '-' ?
+            if(strchr(token, '-') == strrchr(token, '-'))
+            {
+                //are there any illegal characters?
+                for(i=0; i<strlen(token); i++)
+                {
+                    if( (token[i] < '0') && (token[i] > '9') && (token[i] != '-'))
+                    {
+                        free(tmp_channels);
+                        free(optc);
+                        return 0;
+                    }
+                }
+
+                if( sscanf(token, "%d-%d", &chan_first, &chan_last) != EOF )
+                {
+                    if(chan_first > chan_last)
+                    {
+                        free(tmp_channels);
+                        free(optc);
+                        return 0;
+                    }
+                    for(i=chan_first; i<=chan_last; i++)
+                    {
+                        //if( (! invalid_channel(i)) && (chan_remain > 0) )
+                        if( chan_remain > 0)
+                        {
+                                tmp_channels[chan_max-chan_remain]=i;
+                                chan_remain--;
+                        }
+                    }
+                }
+                else
+                {
+                    free(tmp_channels);
+                    free(optc);
+                    return 0;
+                }
+
+            }
+            else
+            {
+                free(tmp_channels);
+                free(optc);
+                return 0;
+            }
+        }
+        else
+        {
+            //are there any illegal characters?
+            for(i=0; i<strlen(token); i++)
+            {
+                if( (token[i] < '0') && (token[i] > '9') )
+                {
+                    free(tmp_channels);
+                    free(optc);
+                    return 0;
+                }
+            }
+
+            if( sscanf(token, "%d", &chan_cur) != EOF)
+            {
+                //if( (! invalid_channel(chan_cur)) && (chan_remain > 0) )
+                if(chan_remain > 0)
+                {
+                        tmp_channels[chan_max-chan_remain]=chan_cur;
+                        chan_remain--;
+                }
+
+            }
+            else
+            {
+                free(tmp_channels);
+                free(optc);
+                return 0;
+            }
+        }
+    }
+
+    //G.own_channels = (int*) malloc(sizeof(int)*(chan_max - chan_remain + 1));
+
+    for(i=0; i<(chan_max - chan_remain); i++)
+    {
+        channels[i] = tmp_channels[i];
+    }
+
+    channels[i] = 0;
+
+    free(tmp_channels);
+    free(optc);
+    return 1;
+}
+
+
 int main(int argc, char *argv[]) {
 
-    int c;
+    int option, option_index;
     pthread_t loop_tid;
     pthread_t channel_tid;
     pthread_t brute_tid;
     char lnet_err[LIBNET_ERRBUF_SIZE];
 
-    int ch_c;
-    char *ch;
-    
+    int ci, i, j;
+    char *bands = NULL;
+    char *view_chans = NULL;
+
     char *log_fn = NULL;
     char *matchers_fn = MATCHERS_DEFAULT_FILENAME;
 
@@ -1167,21 +1218,37 @@ int main(int argc, char *argv[]) {
         exit(1);
     }
 
-    ctx->channel_fix=0;
     ctx->mtu = MTU;
-    ctx->hop_time = HOP_DEFAULT_TIMEOUT;
     ctx->pw_fn = NULL;
 
+    memset(ctx->channels,0,  sizeof(ctx->channels));
     // init libnet tags
     ctx->lnet_p_ip = ctx->lnet_p_tcp = ctx->lnet_p_udp = LIBNET_PTAG_INITIALIZER;
 
     printf ("%s - Simple 802.11 hijacker\n", argv[0]);
     printf ("-----------------------------------------------------\n\n");
 
+    static struct option long_options[] = {
+        {"interface", 1, 0, 'i'},
+        {"inject", 1, 0, 'j'},
+        {"monitor", 1, 0, 'm'},
+        {"band", 1, 0, 'b'},
+        {"channels", 1, 0, 'c'},
+        {"timeout",  1, 0, 't'},
+        {"wordlist",  1, 0, 'w'},
+        {"matchers",  1, 0, 'k'},
+        {"log", 1, 0, 'l'},
+        {"mtu", 1, 0, 'u'},
+        {"help", 0, 0, 'h'},
+        {"debug", 0, 0, 'd'},
+        {0, 0, 0,  0 }  
+    };   
+
     // This handles all of the command line arguments
 
-    while ((c = getopt(argc, argv, "i:c:j:m:ft:l:w:k:hdu:")) != EOF) {
-        switch (c) {
+    while ((option = getopt_long(argc, argv, "i:c:j:b:m:ft:l:w:k:hdu:", long_options, &option_index)) != EOF) {
+
+        switch (option) {
         case 'i':
             ctx->if_inj_name = strdup(optarg);
             ctx->if_mon_name = strdup(optarg);
@@ -1193,20 +1260,11 @@ int main(int argc, char *argv[]) {
             ctx->if_mon_name = strdup(optarg);
             break;
         case 'c':
-            ch_c = 0;
-            ch = strtok(optarg, ",");
-            while(ch != NULL) {
-                if(atoi(ch) >0 && atoi(ch) <= 14 && ch_c < sizeof(ctx->channels)) {
-                    ;
-                    ctx->channels[ch_c] = atoi(ch);
-                    ch_c++;
-                }
-                ch = strtok(NULL, ",");
-            }
-            ctx->channels[ch_c] = 0;
+            parse_channels(optarg, ctx->channels);
+
             break;
-        case 'f':
-            ctx->channel_fix = 1;
+        case 'b':
+            bands = strdup(optarg);
             break;
         case 't':
             ctx->hop_time = atoi(optarg);
@@ -1242,16 +1300,38 @@ int main(int argc, char *argv[]) {
 
     signal(SIGINT, sig_handler);
 
-    if (ctx->if_inj_name == NULL || ctx->if_mon_name == NULL || !ctx->channels[0]) {
-        (void) fprintf(stderr, "Interfaces or channel not set (see -h for more info)\n");
+    if (ctx->if_inj_name == NULL || ctx->if_mon_name == NULL) {
+        (void) fprintf(stderr, "Interfaces not set (see -h for more info)\n");
         return -1;
     }
 
-    if(ctx->hop_time <= 0) {
-        (void) fprintf(stderr, "Hop timeout must be > 0 (remember, it is defined in round seconds)\n");
-        return -1;
-    };
 
+    if(bands != NULL) {
+        if (ctx->channels[0] > 0) {
+            (void) fprintf(stderr, "You can`t use band and channels parameters together, please select one\n");
+            return -1;
+        }
+        ci = 0;
+        for (i = 0; i < (int)strlen(bands); i++) {
+            if (bands[i] == 'a' ) {
+                for(j=0; a_chans[j] != 0; j++ ) {
+                    ctx->channels[ci] = a_chans[j];
+                    ci++;
+                }
+            } else if ( bands[i] == 'b' || bands[i] == 'g') {
+                for(j=0; bg_chans[j] != 0; j++ ) {
+                    ctx->channels[ci] = bg_chans[j];
+                    ci++;
+                }
+            } else {
+                (void) fprintf(stderr, "Error: invalid band (%c)\n", bands[i] );
+                return -1;
+            }
+        }
+        ctx->channels[ci] = 0;
+    }
+
+      
     if(ctx->mtu <= 0 || ctx->mtu > 1500) {
         (void) fprintf(stderr, "MTU must be > 0 and < 1500\n");
         return -1;
@@ -1297,15 +1377,34 @@ int main(int argc, char *argv[]) {
         logger(INFO, "Initialized %s interface for inject. HW: %02x:%02x:%02x:%02x:%02x:%02x", wi_get_ifname(ctx->wi_inj), ctx->if_inj_mac[0], ctx->if_inj_mac[1], ctx->if_inj_mac[2], ctx->if_inj_mac[3], ctx->if_inj_mac[4], ctx->if_inj_mac[5]);
     }
 
-    // Set the channels we'll be monitor and inject on
-    for (ch_c = 0; ch_c <= sizeof(ctx->channels); ch_c++) {
-        if(!ctx->channels[ch_c]) break;
-        if(ch_c == 0) {
-            logger(INFO, "Using monitor and injection channel: %d (default if channel fix defined)", ctx->channels[ch_c]);
-        } else {
-            logger(INFO, "Using monitor and injection channel: %d", ctx->channels[ch_c]);
-        }
+    if(!ctx->hop_time) {
+        ctx->hop_time = HOP_DEFAULT_TIMEOUT;
+        logger(INFO, "Hop time set to default: %d milliseconds", HOP_DEFAULT_TIMEOUT);
     }
+
+    if(ctx->hop_time < 100) {
+        logger(FATAL, "Hop timeout must be > 100, because card can`t hop so fast (remember, it is defined in milliseconds)");
+        return -1;
+    } 
+
+    if (!ctx->channels[0]) {
+        logger(INFO, "Channels or band is not specified. Using default(BG band)");
+        for(i = 0; bg_chans[i] != 0; i++) {
+            ctx->channels[i] = bg_chans[i];
+        }
+        ctx->channels[i] = 0;
+    }
+
+    if((view_chans = malloc(MAX_CHANS_LEN*2))){
+        bzero(view_chans, MAX_CHANS_LEN*2);
+        for (i = 0; i <= sizeof(ctx->channels); i++) {
+            if(!ctx->channels[i]) break;
+            sprintf(view_chans + strlen(view_chans), "%d ", ctx->channels[i]);
+        }
+
+        logger(INFO, "Using channels: %s", view_chans);
+    }
+    
 
     if(thread_queue_init(&bqueue) != 0) {
         logger(FATAL, "Cannot initialize queue");

@@ -2,7 +2,6 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-#include "lrc.h"
 #include "ap.h"
 #include "logger.h"
 

@@ -3,7 +3,7 @@
 HAVE_PYTHON=1
 DEBUG=1
 
-CFLAGS=-Wall
+CFLAGS=-O3 -Wall
 LDFLAGS=-lpthread -lpcap -lpcre -lnet -lnl-genl-3 -lnl-3 -lcrypto
 CC=gcc
 LD=ldd

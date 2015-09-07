@@ -35,6 +35,8 @@ struct matcher_entry {
     struct matcher_entry *next;
 };
 
-struct matcher_entry *parse_matchers_file(char *macher_file_path);
+struct matcher_entry *parse_matchers_file(char *);
+struct matcher_entry *matchers_match(const char *, int, struct ctx *, u_int, u_int, u_int);
+struct matcher_entry *matchers_get_response(u_char *, u_int, struct ctx *, u_int, u_int, u_int);
 
 #endif

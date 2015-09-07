@@ -6,7 +6,94 @@
 #include <fcntl.h>
 #include <string.h>
 
+#include "lrc.h"
+#include "logger.h"
 #include "matchers.h"
+
+struct matcher_entry *matchers_match(const char *data, int datalen, struct ctx *ctx, u_int proto, u_int src_port, u_int dst_port) {
+    struct matcher_entry *matcher;
+    int ovector[30];
+
+    for(matcher = ctx->matchers_list; matcher != NULL; matcher = matcher->next) {
+        if(matcher->proto != MATCHER_PROTO_ANY && matcher->proto != proto) {
+            continue;
+        }
+        if((matcher->dst_port > 0 && matcher->dst_port != dst_port) || (matcher->src_port > 0 && matcher->src_port != src_port)) {
+            continue;
+        }
+        if(pcre_exec(matcher->match, NULL, data, datalen,  0, 0, ovector, 30) > 0) {
+            logger(INFO, "Matched pattern for '%s'", matcher->name);
+            if(matcher->ignore && pcre_exec(matcher->ignore, NULL, data, datalen, 0, 0, ovector, 30) > 0) {
+                logger(INFO, "Matched ignore for '%s'", matcher->name);
+                continue;
+            } else {
+                return matcher;
+            }
+        }
+    }
+    return NULL;
+}
+
+struct matcher_entry *matchers_get_response(u_char *data, u_int datalen, struct ctx *ctx, u_int type, u_int src_port, u_int dst_port) {
+
+    struct matcher_entry *matcher;
+
+    #ifdef HAVE_PYTHON
+    PyObject *args;
+    PyObject *value;
+    Py_ssize_t rdatalen;
+    char *rdata;
+    #endif
+
+    if(!(matcher = matchers_match((const char *)data, datalen, ctx, type, src_port, dst_port))) {
+        logger(DBG, "No matchers found for data");
+        return NULL;
+    }
+
+    #ifdef HAVE_PYTHON
+    if(matcher->pyfunc) {
+        logger(DBG, "We have a Python code to construct response");
+        args = PyTuple_New(2);
+        PyTuple_SetItem(args,0,PyString_FromStringAndSize((const char *)data, datalen)); // here is data
+        PyTuple_SetItem(args,1,PyInt_FromSsize_t(datalen));
+
+        value = PyObject_CallObject(matcher->pyfunc, args);
+        if(value == NULL) {
+            PyErr_Print();
+            logger(WARN, "Python function returns no data!");
+            return NULL;
+        }
+
+        rdata = PyString_AsString(value);
+        rdatalen = PyString_Size(value);
+
+        if(rdata != NULL && rdatalen > 0) {
+            matcher->response_len = (u_int) rdatalen;
+            if(matcher->response) {
+                // We already have previous response, free it
+                free(matcher->response);
+            }
+            matcher->response = malloc(matcher->response_len);
+            memcpy(matcher->response, (u_char *) rdata, rdatalen);
+        } else {
+            PyErr_Print();
+            logger(WARN, "Python cannot convert return string");
+            return NULL;
+        }
+        return matcher;
+    }
+    #endif
+    
+    if(matcher->response) {
+        logger(DBG, "We have a plain text response");
+        return matcher;
+    }
+
+    logger(WARN, "There is no response data!");
+    return NULL;
+
+}
+
 
 struct matcher_entry *check_block_params(struct matcher_entry *head) {
 

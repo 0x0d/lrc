@@ -10,7 +10,7 @@
 #include "osdep/osdep.h"
 #include "ieee80211.h"
 
-#define HOP_DEFAULT_TIMEOUT 5
+#define HOP_DEFAULT_TIMEOUT 5000
 #define MTU 1400
 
 // Can`t be > 4096
@@ -20,6 +20,7 @@
 #define LLC_SIZE 8
 #define PW_MAX_SIZE 256
 #define PW_MAX_COUNT 65535 
+#define MAX_CHANS_LEN 256
 
 // context for holding program state
 struct ctx {
@@ -29,7 +30,7 @@ struct ctx {
     u_char if_inj_mac[6];
     u_char if_mon_mac[6];
 
-    u_int channels[14];
+    u_int channels[MAX_CHANS_LEN];
     u_int channel_fix;
 
     char *pw_fn;
@@ -58,6 +59,5 @@ struct ctx {
 
 #define BRUTE_STA 1
 #define BRUTE_EXIT 2
-
 
 #endif
