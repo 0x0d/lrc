@@ -56,7 +56,7 @@
     (b)[(i) + 3] = (uint8) ( (n)       );       \
 }
 
-static int encrypt_rc4(uchar * data, int len, uchar * key, int keylen)
+static int encrypt_rc4(u_char * data, int len, u_char * key, int keylen)
 {
     RC4_KEY S;
 
@@ -66,15 +66,15 @@ static int encrypt_rc4(uchar * data, int len, uchar * key, int keylen)
     return (0);
 }
 
-static int decrypt_rc4(uchar * data, int len, uchar * key, int keylen)
+static int decrypt_rc4(u_char * data, int len, u_char * key, int keylen)
 {
     encrypt_rc4(data, len, key, keylen);
     return (check_crc_buf(data, len - 4));
 }
 
-int add_crc32(unsigned char *data, int length)
+int add_crc32(u_char *data, int length)
 {
-    unsigned long crc;
+    u_long crc;
 
     crc = calc_crc(data, length);
 
@@ -88,10 +88,10 @@ int add_crc32(unsigned char *data, int length)
 
 /* derive the PMK from the passphrase and the essid */
 
-void calc_pmk(char *key, char *essid_pre, uchar pmk[40])
+void calc_pmk(char *key, char *essid_pre, u_char pmk[40])
 {
     int i, j, slen;
-    uchar buffer[65];
+    u_char buffer[65];
     char essid[33 + 4];
     SHA_CTX ctx_ipad;
     SHA_CTX ctx_opad;
@@ -121,7 +121,7 @@ void calc_pmk(char *key, char *essid_pre, uchar pmk[40])
     /* iterate HMAC-SHA1 over itself 8192 times */
 
     essid[slen - 1] = '\1';
-    HMAC(EVP_sha1(), (uchar *) key, strlen(key), (uchar *) essid, slen, pmk,
+    HMAC(EVP_sha1(), (u_char *) key, strlen(key), (u_char *) essid, slen, pmk,
          NULL);
     memcpy(buffer, pmk, 20);
 
@@ -139,7 +139,7 @@ void calc_pmk(char *key, char *essid_pre, uchar pmk[40])
     }
 
     essid[slen - 1] = '\2';
-    HMAC(EVP_sha1(), (uchar *) key, strlen(key), (uchar *) essid, slen,
+    HMAC(EVP_sha1(), (u_char *) key, strlen(key), (u_char *) essid, slen,
          pmk + 20, NULL);
     memcpy(buffer, pmk + 20, 20);
 
@@ -157,9 +157,9 @@ void calc_pmk(char *key, char *essid_pre, uchar pmk[40])
     }
 }
 
-unsigned long calc_crc(unsigned char *buf, int len)
+u_long calc_crc(u_char *buf, int len)
 {
-    unsigned long crc = 0xFFFFFFFF;
+    u_long crc = 0xFFFFFFFF;
 
     for (; len > 0; len--, buf++)
         crc = crc_tbl[(crc ^ *buf) & 0xFF] ^ (crc >> 8);
@@ -169,9 +169,9 @@ unsigned long calc_crc(unsigned char *buf, int len)
 
 /* CRC checksum verification routine */
 
-int check_crc_buf(unsigned char *buf, int len)
+int check_crc_buf(u_char *buf, int len)
 {
-    unsigned long crc;
+    u_long crc;
 
     crc = calc_crc(buf, len);
     buf += len;
@@ -181,7 +181,7 @@ int check_crc_buf(unsigned char *buf, int len)
             ((crc >> 24) & 0xFF) == buf[3]);
 }
 
-int calc_crc_buf(unsigned char *buf, int len)
+int calc_crc_buf(u_char *buf, int len)
 {
     return (calc_crc(buf, len));
 }
@@ -203,7 +203,7 @@ int is_cdp_vtp(void *wh)
     return 0;
 }
 
-int init_michael(struct Michael *mic, uchar key[8])
+int init_michael(struct Michael *mic, u_char key[8])
 {
     mic->key0 = key[0] << 0 | key[1] << 8 | key[2] << 16 | key[3] << 24;
     mic->key1 = key[4] << 0 | key[5] << 8 | key[6] << 16 | key[7] << 24;
@@ -215,7 +215,7 @@ int init_michael(struct Michael *mic, uchar key[8])
     return 0;
 }
 
-int michael_append_byte(struct Michael *mic, uchar byte)
+int michael_append_byte(struct Michael *mic, u_char byte)
 {
     mic->message |= (byte << (8 * mic->nBytesInM));
     mic->nBytesInM++;
@@ -239,7 +239,7 @@ int michael_append_byte(struct Michael *mic, uchar byte)
     return 0;
 }
 
-int michael_remove_byte(struct Michael *mic, uchar bytes[4])
+int michael_remove_byte(struct Michael *mic, u_char bytes[4])
 {
     if (mic->nBytesInM == 0) {
         // Clear the buffer
@@ -265,7 +265,7 @@ int michael_remove_byte(struct Michael *mic, uchar bytes[4])
     return 0;
 }
 
-int michael_append(struct Michael *mic, uchar * bytes, int length)
+int michael_append(struct Michael *mic, u_char * bytes, int length)
 {
     while (length > 0) {
         michael_append_byte(mic, *bytes++);
@@ -274,7 +274,7 @@ int michael_append(struct Michael *mic, uchar * bytes, int length)
     return 0;
 }
 
-int michael_remove(struct Michael *mic, uchar * bytes, int length)
+int michael_remove(struct Michael *mic, u_char * bytes, int length)
 {
     while (length >= 4) {
         michael_remove_byte(mic, (bytes + length - 4));
@@ -333,7 +333,7 @@ int michael_finalize_zero(struct Michael *mic)
     return 0;
 }
 
-int michael_test(uchar key[8], uchar * message, int length, uchar out[8])
+int michael_test(u_char key[8], u_char * message, int length, u_char out[8])
 {
     int i = 0;
     struct Michael mic0;
@@ -342,11 +342,11 @@ int michael_test(uchar key[8], uchar * message, int length, uchar out[8])
     struct Michael mic;
 
     init_michael(&mic0,
-                 (unsigned char *)"\x00\x00\x00\x00\x00\x00\x00\x00");
+                 (u_char *)"\x00\x00\x00\x00\x00\x00\x00\x00");
     init_michael(&mic1,
-                 (unsigned char *)"\x00\x00\x00\x00\x00\x00\x00\x00");
+                 (u_char *)"\x00\x00\x00\x00\x00\x00\x00\x00");
     init_michael(&mic2,
-                 (unsigned char *)"\x00\x00\x00\x00\x00\x00\x00\x00");
+                 (u_char *)"\x00\x00\x00\x00\x00\x00\x00\x00");
 
     michael_append_byte(&mic0, 0x02);
     michael_append_byte(&mic1, 0x01);
@@ -381,13 +381,13 @@ int michael_test(uchar key[8], uchar * message, int length, uchar out[8])
     return (memcmp(mic.mic, out, 8) == 0);
 }
 
-int calc_tkip_mic_key(uchar * packet, int length, uchar key[8])
+int calc_tkip_mic_key(u_char * packet, int length, u_char key[8])
 {
     int z, is_qos = 0;
-    uchar smac[6], dmac[6], bssid[6];
-    uchar prio[4];
-    uchar message[4096];
-    uchar *ptr;
+    u_char smac[6], dmac[6], bssid[6];
+    u_char prio[4];
+    u_char message[4096];
+    u_char *ptr;
     struct Michael mic;
 
     memset(message, 0, 4096);
@@ -464,11 +464,11 @@ int calc_tkip_mic_key(uchar * packet, int length, uchar key[8])
     return 0;
 }
 
-int calc_tkip_mic(uchar * packet, int length, uchar ptk[80], uchar value[8])
+int calc_tkip_mic(u_char * packet, int length, u_char ptk[80], u_char value[8])
 {
     int z, koffset = 0, is_qos = 0;
-    uchar smac[6], dmac[6], bssid[6];
-    uchar prio[4];
+    u_char smac[6], dmac[6], bssid[6];
+    u_char prio[4];
     struct Michael mic;
 
     z = ((packet[1] & 3) != 3) ? 24 : 30;
@@ -612,7 +612,7 @@ const short TkipSbox[2][256] = {
 #define TK16(N)       MK16(TK1[2*(N)+1],TK1[2*(N)])
 #define _S_(x)        (TkipSbox[0][LO8(x)] ^ TkipSbox[1][HI8(x)])
 
-int calc_tkip_ppk(uchar * h80211, int caplen, uchar TK1[16], uchar key[16])
+int calc_tkip_ppk(u_char * h80211, int caplen, u_char TK1[16], u_char key[16])
 {
     int i, z;
     uint32_t IV32;
@@ -674,9 +674,9 @@ int calc_tkip_ppk(uchar * h80211, int caplen, uchar TK1[16], uchar key[16])
     return 0;
 }
 
-int decrypt_tkip(uchar * h80211, int caplen, uchar TK1[16])
+int decrypt_tkip(u_char * h80211, int caplen, u_char TK1[16])
 {
-    uchar K[16];
+    u_char K[16];
     int z;
 
     z = ((h80211[1] & 3) != 3) ? 24 : 30;
@@ -691,19 +691,19 @@ int decrypt_tkip(uchar * h80211, int caplen, uchar TK1[16])
 
 /* CCMP (AES-CTR-MAC) decryption routine */
 
-static inline void XOR(uchar * dst, uchar * src, int len)
+static inline void XOR(u_char * dst, u_char * src, int len)
 {
     int i;
     for (i = 0; i < len; i++)
         dst[i] ^= src[i];
 }
 
-int decrypt_ccmp(uchar * h80211, int caplen, uchar TK1[16])
+int decrypt_ccmp(u_char * h80211, int caplen, u_char TK1[16])
 {
     int is_a4, i, n, z, blocks, is_qos;
     int data_len, last, offset;
-    uchar B0[16], B[16], MIC[16];
-    uchar PN[6], AAD[32];
+    u_char B0[16], B[16], MIC[16];
+    u_char PN[6], AAD[32];
     AES_KEY aes_ctx;
 
     is_a4 = (h80211[1] & 3) == 3;
@@ -791,12 +791,12 @@ int decrypt_ccmp(uchar * h80211, int caplen, uchar TK1[16])
     return (memcmp(h80211 + offset, MIC, 8) == 0);
 }
 
-int encrypt_ccmp(uchar * h80211, int caplen, uchar TK1[16])
+int encrypt_ccmp(u_char * h80211, int caplen, u_char TK1[16])
 {
     int is_a4, i, n, z, blocks, is_qos;
     int data_len, last, offset;
-    uchar B0[16], B[16], MIC[16];
-    uchar PN[6], AAD[32];
+    u_char B0[16], B[16], MIC[16];
+    u_char PN[6], AAD[32];
     AES_KEY aes_ctx;
 
     is_a4 = (h80211[1] & 3) == 3;
@@ -918,19 +918,19 @@ int encrypt_wpa(uint8_t * h80211, int h80211_len, struct wpa_info *wp,
 	calc_ptk(st, pmk);
 
 	if (st->keyver == 1) {
-		unsigned char mic[8];
-		uchar data_tmp[h80211_len - 8];
+		u_char mic[8];
+		u_char data_tmp[h80211_len - 8];
 		memcpy(data_tmp, h80211, z);
 		memcpy(data_tmp + z, h80211 + offset, h80211_len - offset);
 		calc_tkip_mic(data_tmp, h80211_len - 8, st->ptk, mic);
 
-		unsigned long icv_value;
-		uchar data_tmp_[h80211_len - offset];
+		u_long icv_value;
+		u_char data_tmp_[h80211_len - offset];
 		memcpy(data_tmp_, h80211 + offset, h80211_len - offset);
 		memcpy(data_tmp_ + h80211_len - offset, mic, 8);
 		icv_value = calc_crc_buf(data_tmp_, h80211_len - z);
 
-		unsigned char icv[4];
+		u_char icv[4];
 		icv[0] = (icv_value) & 0xFF;
 		icv[1] = (icv_value >> 8) & 0xFF;
 		icv[2] = (icv_value >> 16) & 0xFF;
@@ -945,7 +945,7 @@ int encrypt_wpa(uint8_t * h80211, int h80211_len, struct wpa_info *wp,
 	} else {
 		h80211_len = h80211_len + 8;
 
-		uchar data_test[h80211_len];
+		u_char data_test[h80211_len];
 		memcpy(data_test, h80211, h80211_len - 8);
 
 		int i;
@@ -973,7 +973,7 @@ int encrypt_wep(uint8_t * h80211, int h80211_len, const uint8_t * wepkey)
 	memcpy(h80211 + z, keyiv, 3);
 	memcpy(h80211 + z + 3, "\x00", 1);
 
-	add_crc32((unsigned char *)h80211 + z + 4, h80211_len - z - 4);
+	add_crc32((u_char *)h80211 + z + 4, h80211_len - z - 4);
 
 	RC4_KEY S;
 	RC4_set_key(&S, 3 + strlen((const char *)wepkey), keyiv);
@@ -1080,8 +1080,8 @@ int calc_ptk(struct sta_info *sta_cur, u_char *pmk)
 {
 
     int i;
-    uchar pke[100];
-    uchar mic[20];
+    u_char pke[100];
+    u_char mic[20];
 
     // pre-compute the key expansion buffer
     memcpy( pke, "Pairwise key expansion", 23 );
@@ -1102,7 +1102,7 @@ int calc_ptk(struct sta_info *sta_cur, u_char *pmk)
 
     for (i = 0; i < 4; i++) {
         pke[99] = i;
-        HMAC(EVP_sha1(), pmk, 32, pke, 100, (uchar *)&sta_cur->wpa.ptk + i * 20, NULL);
+        HMAC(EVP_sha1(), pmk, 32, pke, 100, (u_char *)&sta_cur->wpa.ptk + i * 20, NULL);
     }
 
     // check the EAPOL frame MIC
@@ -1126,7 +1126,7 @@ int check_wpa_password(char *password, struct sta_info *sta_cur)
 int decrypt_wpa(u_char *h80211, int h80211_len, struct sta_info *sta_cur, char *password, u_char *essid, u_char *bssid)
 {
     int z;
-    uchar pmk[40];
+    u_char pmk[40];
 
     if (check_crc_buf(h80211, h80211_len - 4) == 1) {
         h80211_len = -4;

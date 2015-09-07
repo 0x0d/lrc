@@ -50,11 +50,9 @@
         << IEEE80211_FC0_SUBTYPE_SHIFT
 
 
-#define NULL_MAC  (uchar*)"\x00\x00\x00\x00\x00\x00"
-#define SPANTREE  (uchar*)"\x01\x80\xC2\x00\x00\x00"
-#define CDP_VTP   (uchar*)"\x01\x00\x0C\xCC\xCC\xCC"
-
-#define uchar  unsigned char
+#define NULL_MAC  (u_char*)"\x00\x00\x00\x00\x00\x00"
+#define SPANTREE  (u_char*)"\x01\x80\xC2\x00\x00\x00"
+#define CDP_VTP   (u_char*)"\x01\x00\x0C\xCC\xCC\xCC"
 
 #define ROL32( A, n ) \
 	( ((A) << (n)) | ( ((A)>>(32-(n))) & ( (1UL << (n)) - 1 ) ) )
@@ -71,49 +69,49 @@
 
 struct WPA_ST_info {
     struct WPA_ST_info *next;	/* next supplicant              */
-    uchar stmac[6];		/* supplicant MAC               */
-    uchar bssid[6];		/* authenticator MAC            */
-    uchar snonce[32];	/* supplicant nonce             */
-    uchar anonce[32];	/* authenticator nonce          */
-    uchar keymic[20];	/* eapol frame MIC              */
-    uchar eapol[256];	/* eapol frame contents         */
-    uchar ptk[80];		/* pairwise transcient key      */
+    u_char stmac[6];		/* supplicant MAC               */
+    u_char bssid[6];		/* authenticator MAC            */
+    u_char snonce[32];	/* supplicant nonce             */
+    u_char anonce[32];	/* authenticator nonce          */
+    u_char keymic[20];	/* eapol frame MIC              */
+    u_char eapol[256];	/* eapol frame contents         */
+    u_char ptk[80];		/* pairwise transcient key      */
     int eapol_size;		/* eapol frame size             */
-    unsigned long t_crc;	/* last ToDS   frame CRC        */
-    unsigned long f_crc;	/* last FromDS frame CRC        */
+    u_long t_crc;	/* last ToDS   frame CRC        */
+    u_long f_crc;	/* last FromDS frame CRC        */
     int keyver, valid_ptk;
 };
 
 struct Michael {
-    unsigned long key0;
-    unsigned long key1;
-    unsigned long left;
-    unsigned long right;
-    unsigned long nBytesInM;
-    unsigned long message;
-    unsigned char mic[8];
+    u_long key0;
+    u_long key1;
+    u_long left;
+    u_long right;
+    u_long nBytesInM;
+    u_long message;
+    u_char mic[8];
 };
 
 struct rc4_state {
     int x, y, m[256];
 };
 
-void calc_pmk(char *key, char *essid, unsigned char pmk[40]);
-int check_crc_buf(unsigned char *buf, int len);
-int calc_crc_buf(unsigned char *buf, int len);
-unsigned long calc_crc(unsigned char *buf, int len);
-unsigned long calc_crc_plain(unsigned char *buf, int len);
-int add_crc32(unsigned char *data, int length);
-int add_crc32_plain(unsigned char *data, int length);
-int calc_tkip_ppk(unsigned char *h80211, int caplen, unsigned char TK1[16],
-                  unsigned char key[16]);
-int calc_tkip_mic(uchar * packet, int length, uchar ptk[80], uchar value[8]);
-int michael_test(uchar key[8], uchar * message, int length, uchar out[8]);
-int calc_tkip_mic_key(uchar * packet, int length, uchar key[8]);
+void calc_pmk(char *key, char *essid, u_char pmk[40]);
+int check_crc_buf(u_char *buf, int len);
+int calc_crc_buf(u_char *buf, int len);
+u_long calc_crc(u_char *buf, int len);
+u_long calc_crc_plain(u_char *buf, int len);
+int add_crc32(u_char *data, int length);
+int add_crc32_plain(u_char *data, int length);
+int calc_tkip_ppk(u_char *h80211, int caplen, u_char TK1[16],
+                  u_char key[16]);
+int calc_tkip_mic(u_char * packet, int length, u_char ptk[80], u_char value[8]);
+int michael_test(u_char key[8], u_char * message, int length, u_char out[8]);
+int calc_tkip_mic_key(u_char * packet, int length, u_char key[8]);
 
-int decrypt_tkip(unsigned char *h80211, int caplen, unsigned char TK1[16]);
-int decrypt_ccmp(unsigned char *h80211, int caplen, unsigned char TK1[16]);
-int encrypt_ccmp(unsigned char *h80211, int caplen, unsigned char TK1[16]);
+int decrypt_tkip(u_char *h80211, int caplen, u_char TK1[16]);
+int decrypt_ccmp(u_char *h80211, int caplen, u_char TK1[16]);
+int encrypt_ccmp(u_char *h80211, int caplen, u_char TK1[16]);
 
 /*
 int decrypt_wep(uint8_t * src_dst, int h80211_len, uint8_t * password);

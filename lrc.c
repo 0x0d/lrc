@@ -3,6 +3,7 @@
 #include <getopt.h>
 #include <unistd.h>
 #include <signal.h>
+#include <stdint.h>
 
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -473,10 +474,10 @@ void ip_packet_process(const u_char *dot3, u_int dot3_len, struct ieee80211_fram
 }
 
 
-int parse_rsn(unsigned char *p, int len, int rsn)
+int parse_rsn(u_char *p, int len, int rsn)
 {
     int c;
-    unsigned char *start = p;
+    u_char *start = p;
     int psk = 0;
 
     if (len < 2) {
@@ -529,7 +530,7 @@ int parse_rsn(unsigned char *p, int len, int rsn)
     }
 }
 
-int parse_elem_vendor(unsigned char *e, int l)
+int parse_elem_vendor(u_char *e, int l)
 {
     struct ieee80211_ie_wpa *wpa = (struct ieee80211_ie_wpa*) e;
 
@@ -549,7 +550,7 @@ int parse_elem_vendor(unsigned char *e, int l)
         return 0;
     }
 
-    return parse_rsn((unsigned char*) &wpa->wpa_version, l - 6, 0);
+    return parse_rsn((u_char*) &wpa->wpa_version, l - 6, 0);
 }
 
 void dot11_beacon_process(struct ctx *ctx, struct ieee80211_frame *wh, int len)
@@ -1027,6 +1028,7 @@ void *bruteforce_thread(void *arg)
     char *buffer = (char *)malloc(size);
     int pw_iter = 0;
     int pw_len;
+    int i;
 
     FILE *fp;
     if(!(fp = fopen(ctx->pw_fn, "r"))) {
@@ -1068,7 +1070,7 @@ void *bruteforce_thread(void *arg)
                 sta_cur = msg.data;
                 logger(DBG, "We got brute task for: %s[%02X:%02X:%02X:%02X:%02X:%02X] STA: [%02X:%02X:%02X:%02X:%02X:%02X]", sta_cur->ap->essid, sta_cur->ap->bssid[0], sta_cur->ap->bssid[1], sta_cur->ap->bssid[2], sta_cur->ap->bssid[3], sta_cur->ap->bssid[4], sta_cur->ap->bssid[5], sta_cur->wpa.stmac[0], sta_cur->wpa.stmac[1], sta_cur->wpa.stmac[2], sta_cur->wpa.stmac[3], sta_cur->wpa.stmac[4], sta_cur->wpa.stmac[5]);
 
-                for(int i=0; i < PW_MAX_COUNT; i++) {
+                for(i=0; i < PW_MAX_COUNT; i++) {
                     if(passwords[i] && (strlen(passwords[i]) >= 8)) {
                         if(check_wpa_password(passwords[i], sta_cur)) {
                             logger(INFO, "OK, we found a password for AP: %s : %s", sta_cur->ap->essid, passwords[i]);
@@ -1097,7 +1099,7 @@ void *bruteforce_thread(void *arg)
 
 int parse_channels(const char *optarg, u_int *channels)
 {
-    unsigned int i=0,chan_cur=0,chan_first=0,chan_last=0,chan_max=128,chan_remain=0;
+    int i=0,chan_cur=0,chan_first=0,chan_last=0,chan_max=128,chan_remain=0;
     char *optchan = NULL, *optc;
     char *token = NULL;
     int *tmp_channels;

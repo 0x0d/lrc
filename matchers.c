@@ -141,7 +141,7 @@ struct matcher_entry *parse_matchers_file(char *matcher_file_path)
     FILE *matcher_file;
     char matcher_line[MATCHER_MAX_LEN];
     struct matcher_entry *head = NULL;
-    unsigned int line_no = 0;
+    int line_no = 0;
 
     matcher_file = fopen(matcher_file_path, "r");
 
@@ -154,7 +154,7 @@ struct matcher_entry *parse_matchers_file(char *matcher_file_path)
         char command[64] = {0};
         char *argument, *ptr;
         const char *errptr;
-        unsigned int arglen, lenread=0;
+        int arglen, lenread=0;
         int c, fd;
 #ifdef HAVE_PYTHON
         int pyinitialized=0;
