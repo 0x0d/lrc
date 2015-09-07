@@ -52,9 +52,9 @@ void usage(char *argv[])
     printf("\t-d, --debug\t\t\t: enable debug messages\n");
     printf("\n");
     printf("Example(for single interface): %s -i wlan0 -c 1,6,11\n", argv[0]);
-    printf("Example(for dual interfaces): %s -m wlan0 -j wlan1 -c 1,6,11\n", argv[0]);
-    printf("Example(for single interface and channel fix): %s -i wlan0 -c 9 -f\n", argv[0]);
-    printf("Example(for single interface and WPA/WEP inject): %s -i wlan0 -c 1,5 -t 5 -w <wordlist>\n", argv[0]);
+    printf("Example(for dual interfaces): %s -m wlan0 -j wlan1 -c 1-6,8\n", argv[0]);
+    printf("Example(very fast channel hop on BG band): %s --interface wlan0 --band bg --timeout 200\n", argv[0]);
+    printf("Example(WPA/WEP inject): %s --interface wlan0 --channels 6 --wordlist <wordlist>\n", argv[0]);
     printf("\n");
     exit(0);
 }
