@@ -23,21 +23,21 @@
 #include "crypto.h"
 
 int dead = 0;
-int debugged = 0; 
+int debugged = 0;
 
 int bg_chans [] = {
     1, 7, 13, 2, 8, 3, 14, 9, 4, 10, 5, 11, 6, 12, 0
 };
 
-int a_chans [] =
-{
+int a_chans [] = {
     36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108,
     112, 116, 120, 124, 128, 132, 136, 140, 149,
     153, 157, 161, 184, 188, 192, 196, 200, 204,
     208, 212, 216,0
 };
 
-void usage(char *argv[]) {
+void usage(char *argv[])
+{
     printf("usage: %s [options]", argv[0]);
     printf("\nInterface options:\n");
     printf("\t-i, --interface <iface>\t\t: sets the listen/inject interface\n");
@@ -59,7 +59,8 @@ void usage(char *argv[]) {
     exit(0);
 }
 
-void sig_handler(int sig) {
+void sig_handler(int sig)
+{
 
     signal(sig, SIG_IGN);
 
@@ -76,7 +77,8 @@ void sig_handler(int sig) {
     }
 }
 
-void hexdump (void *addr, u_int len) {
+void hexdump (void *addr, u_int len)
+{
     u_int i;
     u_char buff[17];
     u_char *pc = addr;
@@ -115,24 +117,25 @@ void hexdump (void *addr, u_int len) {
 }
 
 
-int build_tcp_packet(struct iphdr *ip_hdr, struct tcphdr *tcp_hdr, u_char *data, u_int datalen, u_int tcpflags, u_int seqnum, struct ctx *ctx) {
+int build_tcp_packet(struct iphdr *ip_hdr, struct tcphdr *tcp_hdr, u_char *data, u_int datalen, u_int tcpflags, u_int seqnum, struct ctx *ctx)
+{
 
     // libnet wants the data in host-byte-order
     ctx->lnet_p_tcp = libnet_build_tcp(
-                ntohs(tcp_hdr->dest), // source port
-                ntohs(tcp_hdr->source), // dest port
-                seqnum, // sequence number
-                ntohl(tcp_hdr->seq) + ( ntohs(ip_hdr->tot_len) - ip_hdr->ihl * 4 - tcp_hdr->doff * 4 ), // ack number
-                tcpflags, // tcp flags
-                0xffff, // window size
-                0, // checksum, libnet will autofill it
-                0, // urg ptr
-                LIBNET_TCP_H + datalen, // total length of the TCP packet
-                (u_char *)data, // response
-                datalen, // response_length
-                ctx->lnet, // libnet_t pointer
-                ctx->lnet_p_tcp // protocol tag
-            );
+                          ntohs(tcp_hdr->dest), // source port
+                          ntohs(tcp_hdr->source), // dest port
+                          seqnum, // sequence number
+                          ntohl(tcp_hdr->seq) + ( ntohs(ip_hdr->tot_len) - ip_hdr->ihl * 4 - tcp_hdr->doff * 4 ), // ack number
+                          tcpflags, // tcp flags
+                          0xffff, // window size
+                          0, // checksum, libnet will autofill it
+                          0, // urg ptr
+                          LIBNET_TCP_H + datalen, // total length of the TCP packet
+                          (u_char *)data, // response
+                          datalen, // response_length
+                          ctx->lnet, // libnet_t pointer
+                          ctx->lnet_p_tcp // protocol tag
+                      );
 
     if(ctx->lnet_p_tcp == -1) {
         logger(WARN, "libnet_build_tcp returns error: %s", libnet_geterror(ctx->lnet));
@@ -140,20 +143,20 @@ int build_tcp_packet(struct iphdr *ip_hdr, struct tcphdr *tcp_hdr, u_char *data,
     }
 
     ctx->lnet_p_ip = libnet_build_ipv4(
-                LIBNET_TCP_H + LIBNET_IPV4_H + datalen, // total length of IP packet
-                0, // TOS bits, type of service
-                1, // IPID identification number (need to calculate)
-                0, // fragmentation offset
-                0xff, // TTL time to live
-                IPPROTO_TCP, // upper layer protocol
-                0, // checksum, libnet will autofill it
-                ip_hdr->daddr, // source IPV4 address
-                ip_hdr->saddr, // dest IPV4 address
-                NULL, // response, no payload
-                0, // response length
-                ctx->lnet, // libnet_t pointer
-                ctx->lnet_p_ip // protocol tag
-            );
+                         LIBNET_TCP_H + LIBNET_IPV4_H + datalen, // total length of IP packet
+                         0, // TOS bits, type of service
+                         1, // IPID identification number (need to calculate)
+                         0, // fragmentation offset
+                         0xff, // TTL time to live
+                         IPPROTO_TCP, // upper layer protocol
+                         0, // checksum, libnet will autofill it
+                         ip_hdr->daddr, // source IPV4 address
+                         ip_hdr->saddr, // dest IPV4 address
+                         NULL, // response, no payload
+                         0, // response length
+                         ctx->lnet, // libnet_t pointer
+                         ctx->lnet_p_ip // protocol tag
+                     );
 
     if(ctx->lnet_p_ip == -1) {
         logger(WARN, "libnet_build_ipv4 returns error: %s", libnet_geterror(ctx->lnet));
@@ -163,38 +166,39 @@ int build_tcp_packet(struct iphdr *ip_hdr, struct tcphdr *tcp_hdr, u_char *data,
     return 1;
 }
 
-int build_udp_packet(struct iphdr *ip_hdr, struct udphdr *udp_hdr, u_char *data, u_int datalen, struct ctx *ctx) {
+int build_udp_packet(struct iphdr *ip_hdr, struct udphdr *udp_hdr, u_char *data, u_int datalen, struct ctx *ctx)
+{
 
     ctx->lnet_p_udp = libnet_build_udp(
-                ntohs(udp_hdr->source), // source port
-                ntohs(udp_hdr->dest), // destination port
-                LIBNET_UDP_H + datalen, // total length of the UDP packet
-                0, // libnet will autofill the checksum
-                NULL, // payload
-                0, // payload length
-                ctx->lnet, // pointer to libnet context
-                ctx->lnet_p_udp // protocol tag for udp
-            );
+                          ntohs(udp_hdr->source), // source port
+                          ntohs(udp_hdr->dest), // destination port
+                          LIBNET_UDP_H + datalen, // total length of the UDP packet
+                          0, // libnet will autofill the checksum
+                          NULL, // payload
+                          0, // payload length
+                          ctx->lnet, // pointer to libnet context
+                          ctx->lnet_p_udp // protocol tag for udp
+                      );
     if(ctx->lnet_p_udp == -1) {
         logger(WARN, "libnet_build_tcp returns error: %s", libnet_geterror(ctx->lnet));
         return 0;
     }
 
     ctx->lnet_p_ip = libnet_build_ipv4(
-                LIBNET_UDP_H + LIBNET_IPV4_H + datalen, // total length of IP packet
-                0, // TOS bits, type of service
-                1, // IPID identification number (need to calculate)
-                0, // fragmentation offset
-                0xff, // TTL time to live
-                IPPROTO_UDP, // upper layer protocol
-                0, // checksum, libnet will autofill it
-                ip_hdr->daddr, // source IPV4 address
-                ip_hdr->saddr, // dest IPV4 address
-                NULL, // response, no payload
-                0, // response length
-                ctx->lnet, // libnet_t pointer
-                ctx->lnet_p_ip // protocol tag=0, build new
-            );
+                         LIBNET_UDP_H + LIBNET_IPV4_H + datalen, // total length of IP packet
+                         0, // TOS bits, type of service
+                         1, // IPID identification number (need to calculate)
+                         0, // fragmentation offset
+                         0xff, // TTL time to live
+                         IPPROTO_UDP, // upper layer protocol
+                         0, // checksum, libnet will autofill it
+                         ip_hdr->daddr, // source IPV4 address
+                         ip_hdr->saddr, // dest IPV4 address
+                         NULL, // response, no payload
+                         0, // response length
+                         ctx->lnet, // libnet_t pointer
+                         ctx->lnet_p_ip // protocol tag=0, build new
+                     );
 
     if(ctx->lnet_p_ip == -1) {
         logger(WARN, "libnet_build_ipv4 returns error: %s", libnet_geterror(ctx->lnet));
@@ -204,8 +208,9 @@ int build_udp_packet(struct iphdr *ip_hdr, struct udphdr *udp_hdr, u_char *data,
     return 1;
 }
 
-u_short fnseq(u_short fn, u_short seq) {
-    
+u_short fnseq(u_short fn, u_short seq)
+{
+
     u_short r = 0;
 
     r = fn;
@@ -213,7 +218,8 @@ u_short fnseq(u_short fn, u_short seq) {
     return htole16(r);
 }
 
-int build_dot11_packet(u_char *l2data, u_int l2datalen, u_char *wldata, u_int *wldatalen, struct ieee80211_frame *wh_old, struct ctx *ctx) {
+int build_dot11_packet(u_char *l2data, u_int l2datalen, u_char *wldata, u_int *wldatalen, struct ieee80211_frame *wh_old, struct ctx *ctx)
+{
 
     struct ieee80211_frame *wh = (struct ieee80211_frame*) wldata;
 
@@ -221,12 +227,12 @@ int build_dot11_packet(u_char *l2data, u_int l2datalen, u_char *wldata, u_int *w
     u_short *sp;
 
     *wldatalen = sizeof(struct ieee80211_frame);
-    
+
     /* duration */
     sp = (u_short*) wh->i_dur;
     //*sp = htole16(32767);
     *sp = htole16(48); // set duration to 48 microseconds. Why 48? Cause we do not care about this field :)
-    
+
     /* seq */
     sp = (u_short*) wh->i_seq;
     *sp = fnseq(0, 1337); // We do not care about this field value too.
@@ -243,15 +249,16 @@ int build_dot11_packet(u_char *l2data, u_int l2datalen, u_char *wldata, u_int *w
     data += 8;
     *wldatalen +=8;
 
-    memcpy(data, l2data, l2datalen);    
+    memcpy(data, l2data, l2datalen);
     *wldatalen += l2datalen;
 
     return 1;
 
 }
 
-int send_packet(struct ieee80211_frame *wh, struct ctx *ctx) {
-    
+int send_packet(struct ieee80211_frame *wh, struct ctx *ctx)
+{
+
     u_char *l2data;
     u_int l2datalen;
 
@@ -281,7 +288,8 @@ int send_packet(struct ieee80211_frame *wh, struct ctx *ctx) {
     return 1;
 }
 
-void clear_packet(struct ctx *ctx) {
+void clear_packet(struct ctx *ctx)
+{
     if(ctx->lnet) {
         libnet_clear_packet(ctx->lnet);
         ctx->lnet_p_ip = LIBNET_PTAG_INITIALIZER;
@@ -290,7 +298,8 @@ void clear_packet(struct ctx *ctx) {
     }
 }
 
-void ip_packet_process(const u_char *dot3, u_int dot3_len, struct ieee80211_frame *wh, struct ctx *ctx) {
+void ip_packet_process(const u_char *dot3, u_int dot3_len, struct ieee80211_frame *wh, struct ctx *ctx)
+{
 
     struct iphdr *ip_hdr;
     struct tcphdr *tcp_hdr;
@@ -332,7 +341,7 @@ void ip_packet_process(const u_char *dot3, u_int dot3_len, struct ieee80211_fram
 
     switch (ip_hdr-> protocol) {
     case IPPROTO_TCP:
-    
+
         /* Calculate the size of the TCP Header. tcp->doff contains the number of 32 bit
          words that represent the header size. Therfore to get the number of bytes
          multiple this number by 4 */
@@ -396,7 +405,7 @@ void ip_packet_process(const u_char *dot3, u_int dot3_len, struct ieee80211_fram
                 }
                 logger(INFO, "TCP reset packet successfully injected");
             }
-            
+
             clear_packet(ctx);
         }
         break;
@@ -464,31 +473,32 @@ void ip_packet_process(const u_char *dot3, u_int dot3_len, struct ieee80211_fram
 }
 
 
-int parse_rsn(unsigned char *p, int len, int rsn) {               
-    int c;  
+int parse_rsn(unsigned char *p, int len, int rsn)
+{
+    int c;
     unsigned char *start = p;
     int psk = 0;
 
     if (len < 2) {
         return 0;
     }
-        
+
     if (memcmp(p, "\x01\x00", 2) != 0) {
         return 0;
     }
-    
+
     if (len < 8) {
         return 0;
     }
-    
+
     p += 2;
-    p += 4; 
+    p += 4;
 
     /* cipher */
     c = le16toh(*((uint16_t*) p));
-                        
-    p += 2 + 4 * c;     
-                    
+
+    p += 2 + 4 * c;
+
     if (len < ((p - start) + 2)) {
         return 0;
     }
@@ -511,7 +521,7 @@ int parse_rsn(unsigned char *p, int len, int rsn) {
         }
         p += 4;
     }
-    
+
     if (!psk) {
         return CRYPT_TYPE_WPA_MGT;
     } else {
@@ -519,7 +529,8 @@ int parse_rsn(unsigned char *p, int len, int rsn) {
     }
 }
 
-int parse_elem_vendor(unsigned char *e, int l) {       
+int parse_elem_vendor(unsigned char *e, int l)
+{
     struct ieee80211_ie_wpa *wpa = (struct ieee80211_ie_wpa*) e;
 
     if (l < 5) {
@@ -541,7 +552,8 @@ int parse_elem_vendor(unsigned char *e, int l) {
     return parse_rsn((unsigned char*) &wpa->wpa_version, l - 6, 0);
 }
 
-void dot11_beacon_process(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
+void dot11_beacon_process(struct ctx *ctx, struct ieee80211_frame *wh, int len)
+{
 
     ieee80211_mgt_beacon_t wb = (ieee80211_mgt_beacon_t) (wh+1);
     int fix_len = 12; // fixed parameters length
@@ -553,16 +565,16 @@ void dot11_beacon_process(struct ctx *ctx, struct ieee80211_frame *wh, int len) 
     int channel = 0;
     int crypt_type = CRYPT_TYPE_OPEN;
     int got_ssid = 0, got_channel = 0;
-    
+
     u_char *bssid = wh->i_addr3;
-    
+
     // skip wh header len
     len -= sizeof(*wh);
 
     if((IEEE80211_BEACON_CAPABILITY(wb) & IEEE80211_CAPINFO_PRIVACY)) {
         crypt_type = CRYPT_TYPE_WEP;
     }
-    
+
     wb += fix_len; // skip fixed params
     len -= fix_len;
 
@@ -578,66 +590,67 @@ void dot11_beacon_process(struct ctx *ctx, struct ieee80211_frame *wh, int len) 
         ie_len = wb[1];
 
         switch (ie_type) {
-            case IEEE80211_ELEMID_SSID:
-                if (!got_ssid) {
-                    if(ie_len > 0) {
-                        strncpy(ssid, (char*) &wb[2], ie_len);
-                        ssid[ie_len] = '\0';
-                    } else { //hidden ssid
-                        ssid[0] = '\0';
-                    }
-                    got_ssid = 1;
-                } 
-                break;
-            case IEEE80211_ELEMID_DSPARMS:
-                if (!got_channel)
-                    channel = wb[2];
-                    got_channel = 1;
-                break;
-        
-            case IEEE80211_ELEMID_VENDOR:
-                if((rc = parse_elem_vendor(wb, ie_len + 2))) {
-                    crypt_type = rc;
+        case IEEE80211_ELEMID_SSID:
+            if (!got_ssid) {
+                if(ie_len > 0) {
+                    strncpy(ssid, (char*) &wb[2], ie_len);
+                    ssid[ie_len] = '\0';
+                } else { //hidden ssid
+                    ssid[0] = '\0';
                 }
-                break;
+                got_ssid = 1;
+            }
+            break;
+        case IEEE80211_ELEMID_DSPARMS:
+            if (!got_channel)
+                channel = wb[2];
+            got_channel = 1;
+            break;
 
-            case IEEE80211_ELEMID_RSN:
-                if((rc = parse_rsn(&wb[2], ie_len, 1))) {
-                    crypt_type = rc;
-                }
-                break;
+        case IEEE80211_ELEMID_VENDOR:
+            if((rc = parse_elem_vendor(wb, ie_len + 2))) {
+                crypt_type = rc;
+            }
+            break;
+
+        case IEEE80211_ELEMID_RSN:
+            if((rc = parse_rsn(&wb[2], ie_len, 1))) {
+                crypt_type = rc;
+            }
+            break;
         }
 
         wb += 2 + ie_len;
         len -= 2 + ie_len;
-         
+
     }
 
     if (got_ssid && got_channel) {
         logger(DBG, "SSID: %s Channel: %d", ssid, channel);
         switch(crypt_type) {
-            case CRYPT_TYPE_WEP:
-                logger(DBG, "Crypt: WEP");
-                break;
-            case CRYPT_TYPE_WPA:
-                logger(DBG, "Crypt: WPA");
-                break;
-            case CRYPT_TYPE_WPA_MGT:
-                logger(DBG, "Crypt: WPA-MGT");
-                break;
-            case CRYPT_TYPE_OPEN:
-                logger(DBG, "Crypt: OPEN");
-                break;
-            default:
-                logger(WARN, "Cannot determine crypt type");
-                break;
+        case CRYPT_TYPE_WEP:
+            logger(DBG, "Crypt: WEP");
+            break;
+        case CRYPT_TYPE_WPA:
+            logger(DBG, "Crypt: WPA");
+            break;
+        case CRYPT_TYPE_WPA_MGT:
+            logger(DBG, "Crypt: WPA-MGT");
+            break;
+        case CRYPT_TYPE_OPEN:
+            logger(DBG, "Crypt: OPEN");
+            break;
+        default:
+            logger(WARN, "Cannot determine crypt type");
+            break;
         }
 
         ap_add(ctx, bssid, ssid, crypt_type, channel);
     }
 }
 
-void dot11_mgt_process(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
+void dot11_mgt_process(struct ctx *ctx, struct ieee80211_frame *wh, int len)
+{
 
     if (len < (int) sizeof(*wh)) {
         logger(DBG, "802.11 too short management packet: %d, skipping it", len);
@@ -645,64 +658,66 @@ void dot11_mgt_process(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
     }
     switch (wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK) {
 
-        // Beacons and Probe responses contains SSID and other useful information about AP
-        case IEEE80211_FC0_SUBTYPE_BEACON:
-        case IEEE80211_FC0_SUBTYPE_PROBE_RESP:
-            logger(DBG, "Management beacon or probe response frame");
-            dot11_beacon_process(ctx, wh, len);
-            break;
-
-        case IEEE80211_FC0_SUBTYPE_AUTH:
-            logger(DBG, "Management auth frame");
-            break;
-
-        case IEEE80211_FC0_SUBTYPE_PROBE_REQ:
-        case IEEE80211_FC0_SUBTYPE_ASSOC_REQ:
-            // TODO extract info from this frames. They can be useful.
-            logger(DBG, "Management probe request or association frame.");
-            break;
-
-        case IEEE80211_FC0_SUBTYPE_DEAUTH:
-            logger(DBG, "Management deauth frame");
-            break;
-
-        case IEEE80211_FC0_SUBTYPE_DISASSOC:
-            logger(DBG, "Management dissassociation frame");
-            break;
-
-        case IEEE80211_FC0_SUBTYPE_ASSOC_RESP:
-            logger(DBG, "Management association response frame");
-            break;
-
-        default:
-            logger(DBG, "Unknown mgmt subtype 0x%02X", wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK);
+    // Beacons and Probe responses contains SSID and other useful information about AP
+    case IEEE80211_FC0_SUBTYPE_BEACON:
+    case IEEE80211_FC0_SUBTYPE_PROBE_RESP:
+        logger(DBG, "Management beacon or probe response frame");
+        dot11_beacon_process(ctx, wh, len);
         break;
-    }    
-    
+
+    case IEEE80211_FC0_SUBTYPE_AUTH:
+        logger(DBG, "Management auth frame");
+        break;
+
+    case IEEE80211_FC0_SUBTYPE_PROBE_REQ:
+    case IEEE80211_FC0_SUBTYPE_ASSOC_REQ:
+        // TODO extract info from this frames. They can be useful.
+        logger(DBG, "Management probe request or association frame.");
+        break;
+
+    case IEEE80211_FC0_SUBTYPE_DEAUTH:
+        logger(DBG, "Management deauth frame");
+        break;
+
+    case IEEE80211_FC0_SUBTYPE_DISASSOC:
+        logger(DBG, "Management dissassociation frame");
+        break;
+
+    case IEEE80211_FC0_SUBTYPE_ASSOC_RESP:
+        logger(DBG, "Management association response frame");
+        break;
+
+    default:
+        logger(DBG, "Unknown mgmt subtype 0x%02X", wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK);
+        break;
+    }
+
 }
 
-void dot11_ctl_process(struct ctx *ctx, struct ieee80211_frame *wh, int len) {
+void dot11_ctl_process(struct ctx *ctx, struct ieee80211_frame *wh, int len)
+{
     switch (wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK) {
-        case IEEE80211_FC0_SUBTYPE_ACK:
-            logger(DBG, "Control ask frame");
-            break;
+    case IEEE80211_FC0_SUBTYPE_ACK:
+        logger(DBG, "Control ask frame");
+        break;
 
-        case IEEE80211_FC0_SUBTYPE_RTS:
-        case IEEE80211_FC0_SUBTYPE_CTS:
-        case IEEE80211_FC0_SUBTYPE_PS_POLL:
-        case IEEE80211_FC0_SUBTYPE_CF_END:
-        case IEEE80211_FC0_SUBTYPE_ATIM:
-            logger(DBG, "Control rts/cts/ps/cf/atim frame");
-            break;
+    case IEEE80211_FC0_SUBTYPE_RTS:
+    case IEEE80211_FC0_SUBTYPE_CTS:
+    case IEEE80211_FC0_SUBTYPE_PS_POLL:
+    case IEEE80211_FC0_SUBTYPE_CF_END:
+    case IEEE80211_FC0_SUBTYPE_ATIM:
+        logger(DBG, "Control rts/cts/ps/cf/atim frame");
+        break;
 
-        default:
-            logger(DBG, "Unknown ctl subtype %x", wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK);
-            break;
+    default:
+        logger(DBG, "Unknown ctl subtype %x", wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK);
+        break;
     }
 }
 
 
-void dot11_data_process(struct ctx *ctx, struct ieee80211_frame *wh, int len, int cleared) {
+void dot11_data_process(struct ctx *ctx, struct ieee80211_frame *wh, int len, int cleared)
+{
 
     u_char *p = (u_char*) (wh + 1);
     int protected = wh->i_fc[1] & IEEE80211_FC1_WEP;
@@ -719,17 +734,17 @@ void dot11_data_process(struct ctx *ctx, struct ieee80211_frame *wh, int len, in
 
     // Skip 802.11 header
     len -= sizeof(*wh);
-    
+
     /*
-	+---+---+------------+------------+-------+-------+
-	|Frm|To |  Address1  | Address2   | Addr. | Addr. |
-	|DS |DS |	         |            |   3   |   4   |
-	+---+---+------------+------------+-------+-------+
-	| 0 | 0 | RA = DA    | TA = SA    | BSSID | N/A   |
-	| 0 | 1 | RA = BSSID | TA = SA    | DA    | N/A   |
-	| 1 | 0 | RA = DA    | TA = BSSID | SA    | N/A   |
-	| 1 | 1 | RA 	     | TA 	      | DA    | SA    |
-	+---+---+------------+------------+-------+-------+
+    +---+---+------------+------------+-------+-------+
+    |Frm|To |  Address1  | Address2   | Addr. | Addr. |
+    |DS |DS |	         |            |   3   |   4   |
+    +---+---+------------+------------+-------+-------+
+    | 0 | 0 | RA = DA    | TA = SA    | BSSID | N/A   |
+    | 0 | 1 | RA = BSSID | TA = SA    | DA    | N/A   |
+    | 1 | 0 | RA = DA    | TA = BSSID | SA    | N/A   |
+    | 1 | 1 | RA 	     | TA 	      | DA    | SA    |
+    +---+---+------------+------------+-------+-------+
     */
 
     if(!fromds && !tods) {
@@ -755,30 +770,30 @@ void dot11_data_process(struct ctx *ctx, struct ieee80211_frame *wh, int len, in
 
     // Skip QOS header
     switch(stype) {
-        case IEEE80211_FC0_SUBTYPE_QOS:
-            p += 2;
-            len -= 2;
-            break;
-        case IEEE80211_FC0_SUBTYPE_DATA:
-            break;
-        case IEEE80211_FC0_SUBTYPE_QOS_NULL:
-        case IEEE80211_FC0_SUBTYPE_CF_ACK:
-        case IEEE80211_FC0_SUBTYPE_CF_POLL:
-        case IEEE80211_FC0_SUBTYPE_CF_ACPL:
-            break;
-        default:
-            return;
+    case IEEE80211_FC0_SUBTYPE_QOS:
+        p += 2;
+        len -= 2;
+        break;
+    case IEEE80211_FC0_SUBTYPE_DATA:
+        break;
+    case IEEE80211_FC0_SUBTYPE_QOS_NULL:
+    case IEEE80211_FC0_SUBTYPE_CF_ACK:
+    case IEEE80211_FC0_SUBTYPE_CF_POLL:
+    case IEEE80211_FC0_SUBTYPE_CF_ACPL:
+        break;
+    default:
+        return;
     }
 
     if(!(ap_cur = ap_lookup(ctx, bssid))) {
         logger(INFO, "Cannot found AP [%02X:%02X:%02X:%02X:%02X:%02X] in cache, skipping", bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5]);
         return;
-    } 
+    }
 
     if(!(sta_cur = sta_lookup(ctx, sta_mac))) {
         sta_cur = sta_add(ctx, sta_mac);
         sta_cur->ap = ap_cur;
-    } 
+    }
 
     // Not protected packets(without WEP flag set)
     if (!protected) {
@@ -791,7 +806,7 @@ void dot11_data_process(struct ctx *ctx, struct ieee80211_frame *wh, int len, in
                 logger(INFO, "We have EAPOL packet from STA: [%02X:%02X:%02X:%02X:%02X:%02X] associating with AP: %s [%02X:%02X:%02X:%02X:%02X:%02X]",sta_cur->sta_mac[0], sta_cur->sta_mac[1], sta_cur->sta_mac[2], sta_cur->sta_mac[3], sta_cur->sta_mac[4], sta_cur->sta_mac[5], ap_cur->essid, bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5]);
                 p += LLC_SIZE;
                 len -= LLC_SIZE;
-                
+
                 if(len > 0 && (ctx->pw_fn != NULL) && (sta_cur->wpa.state != EAPOL_STATE_PROCESSING)) {
                     eapol_wpa_process(p, len, sta_cur);
 
@@ -805,16 +820,16 @@ void dot11_data_process(struct ctx *ctx, struct ieee80211_frame *wh, int len, in
                         return;
                     }
                 }
-             }
+            }
 
-             //IP layer LLC, so try to hijack it
+            //IP layer LLC, so try to hijack it
             if(memcmp(p, "\xaa\xaa\x03\x00\x00\x00\x08\x00", LLC_SIZE) == 0) {
 
                 p += LLC_SIZE;
                 len -= LLC_SIZE;
 
-                // We interested only in STA request packets 
-                if(fromds && !tods) { 
+                // We interested only in STA request packets
+                if(fromds && !tods) {
                     return;
                 }
 
@@ -824,7 +839,7 @@ void dot11_data_process(struct ctx *ctx, struct ieee80211_frame *wh, int len, in
                 }
             }
 
-       }
+        }
     }
 
     if(protected) {
@@ -836,8 +851,8 @@ void dot11_data_process(struct ctx *ctx, struct ieee80211_frame *wh, int len, in
             len -= 8;
         }
 
-        // We interested only in STA request packets 
-        if(fromds && !tods) { 
+        // We interested only in STA request packets
+        if(fromds && !tods) {
             return;
         }
 
@@ -857,7 +872,8 @@ void dot11_data_process(struct ctx *ctx, struct ieee80211_frame *wh, int len, in
     }
 }
 
-void dot11_process(u_char *pkt, int len,  struct rx_info *rxi, struct ctx *ctx) {
+void dot11_process(u_char *pkt, int len,  struct rx_info *rxi, struct ctx *ctx)
+{
 
     struct ieee80211_frame *wh = (struct ieee80211_frame *) pkt;
     int protected = wh->i_fc[1] & IEEE80211_FC1_WEP;
@@ -865,32 +881,32 @@ void dot11_process(u_char *pkt, int len,  struct rx_info *rxi, struct ctx *ctx) 
     logger(DBG, "-------------------------");
     logger(DBG, "Radiotap data: ri_channel: %d, ri_power: %d, ri_noise: %d, ri_rate: %d", rxi->ri_channel, rxi->ri_power, rxi->ri_noise, rxi->ri_rate);
     logger(DBG, "IEEE802.11 frame type:0x%02X subtype:0x%02X protected:%s from_ds:%d to_ds:%d receiver:[%02X:%02X:%02X:%02X:%02X:%02X] transmitter:[%02X:%02X:%02X:%02X:%02X:%02X] bssid:[%02X:%02X:%02X:%02X:%02X:%02X]",
-                wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK,
-                wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK,
-                protected ? "y":"n",
-                wh->i_fc[1] & IEEE80211_FC1_DIR_FROMDS,
-                wh->i_fc[1] & IEEE80211_FC1_DIR_TODS,
-                wh->i_addr1[0], wh->i_addr1[1], wh->i_addr1[2], wh->i_addr1[3], wh->i_addr1[4], wh->i_addr1[5],
-                wh->i_addr2[0], wh->i_addr2[1], wh->i_addr2[2], wh->i_addr2[3], wh->i_addr2[4], wh->i_addr2[5],
-                wh->i_addr3[0], wh->i_addr3[1], wh->i_addr3[2], wh->i_addr3[3], wh->i_addr3[4], wh->i_addr3[5]);
+           wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK,
+           wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK,
+           protected ? "y":"n",
+           wh->i_fc[1] & IEEE80211_FC1_DIR_FROMDS,
+           wh->i_fc[1] & IEEE80211_FC1_DIR_TODS,
+           wh->i_addr1[0], wh->i_addr1[1], wh->i_addr1[2], wh->i_addr1[3], wh->i_addr1[4], wh->i_addr1[5],
+           wh->i_addr2[0], wh->i_addr2[1], wh->i_addr2[2], wh->i_addr2[3], wh->i_addr2[4], wh->i_addr2[5],
+           wh->i_addr3[0], wh->i_addr3[1], wh->i_addr3[2], wh->i_addr3[3], wh->i_addr3[4], wh->i_addr3[5]);
 
     switch (wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) {
-        case IEEE80211_FC0_TYPE_MGT: // management frame
-            logger(DBG, "Management frame");
-            dot11_mgt_process(ctx, wh, len);
-            break;
+    case IEEE80211_FC0_TYPE_MGT: // management frame
+        logger(DBG, "Management frame");
+        dot11_mgt_process(ctx, wh, len);
+        break;
 
-        case IEEE80211_FC0_TYPE_CTL: // control frame
-            logger(DBG, "Control frame");
-            dot11_ctl_process(ctx, wh, len);
-            break;
+    case IEEE80211_FC0_TYPE_CTL: // control frame
+        logger(DBG, "Control frame");
+        dot11_ctl_process(ctx, wh, len);
+        break;
 
-        case IEEE80211_FC0_TYPE_DATA: //data frame
-            logger(DBG, "Data frame");
-            dot11_data_process(ctx, wh, len, 0);
-            break;
-        default:
-            logger(DBG, "Unknown frame type: 0x%02X", wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK);
+    case IEEE80211_FC0_TYPE_DATA: //data frame
+        logger(DBG, "Data frame");
+        dot11_data_process(ctx, wh, len, 0);
+        break;
+    default:
+        logger(DBG, "Unknown frame type: 0x%02X", wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK);
     }
 
 
@@ -898,7 +914,8 @@ void dot11_process(u_char *pkt, int len,  struct rx_info *rxi, struct ctx *ctx) 
 
 
 // Man packet read loop.
-void *loop_thread(void *arg) {
+void *loop_thread(void *arg)
+{
     fd_set rfds;
     int retval;
     int caplen;
@@ -939,7 +956,8 @@ void *loop_thread(void *arg) {
     return NULL;
 }
 
-int channel_change(struct ctx *ctx, int channel) {
+int channel_change(struct ctx *ctx, int channel)
+{
 
     pthread_mutex_lock (&(ctx->mutex));
 
@@ -961,7 +979,8 @@ int channel_change(struct ctx *ctx, int channel) {
 }
 
 // Channel switch thread
-void *channel_thread(void *arg) {
+void *channel_thread(void *arg)
+{
     struct ctx *ctx = (struct ctx *)arg;
 
     u_int ch_c;
@@ -995,10 +1014,11 @@ void *channel_thread(void *arg) {
     return NULL;
 }
 
-void *bruteforce_thread(void *arg) {
-    struct ctx *ctx = (struct ctx *)arg; 
+void *bruteforce_thread(void *arg)
+{
+    struct ctx *ctx = (struct ctx *)arg;
     struct sta_info *sta_cur;
-    struct threadmsg msg; 
+    struct threadmsg msg;
 
     char *passwords[PW_MAX_COUNT];
     bzero(passwords, sizeof(passwords));
@@ -1033,7 +1053,7 @@ void *bruteforce_thread(void *arg) {
         strncpy(passwords[pw_iter], buffer, pw_len);
         pw_iter++;
     } while((c != EOF) && (pw_iter != PW_MAX_COUNT));
-    fclose(fp);          
+    fclose(fp);
     free(buffer);
 
     while(1) {
@@ -1043,27 +1063,27 @@ void *bruteforce_thread(void *arg) {
         }
         if(thread_queue_get(ctx->brute_queue, NULL, &msg) == 0) {
 
-                switch(msg.msgtype) {
-                    case BRUTE_STA:
-                        sta_cur = msg.data;
-                        logger(DBG, "We got brute task for: %s[%02X:%02X:%02X:%02X:%02X:%02X] STA: [%02X:%02X:%02X:%02X:%02X:%02X]", sta_cur->ap->essid, sta_cur->ap->bssid[0], sta_cur->ap->bssid[1], sta_cur->ap->bssid[2], sta_cur->ap->bssid[3], sta_cur->ap->bssid[4], sta_cur->ap->bssid[5], sta_cur->wpa.stmac[0], sta_cur->wpa.stmac[1], sta_cur->wpa.stmac[2], sta_cur->wpa.stmac[3], sta_cur->wpa.stmac[4], sta_cur->wpa.stmac[5]);
+            switch(msg.msgtype) {
+            case BRUTE_STA:
+                sta_cur = msg.data;
+                logger(DBG, "We got brute task for: %s[%02X:%02X:%02X:%02X:%02X:%02X] STA: [%02X:%02X:%02X:%02X:%02X:%02X]", sta_cur->ap->essid, sta_cur->ap->bssid[0], sta_cur->ap->bssid[1], sta_cur->ap->bssid[2], sta_cur->ap->bssid[3], sta_cur->ap->bssid[4], sta_cur->ap->bssid[5], sta_cur->wpa.stmac[0], sta_cur->wpa.stmac[1], sta_cur->wpa.stmac[2], sta_cur->wpa.stmac[3], sta_cur->wpa.stmac[4], sta_cur->wpa.stmac[5]);
 
-                        for(int i=0; i < PW_MAX_COUNT; i++) {
-                            if(passwords[i] && (strlen(passwords[i]) >= 8)) {
-                                if(check_wpa_password(passwords[i], sta_cur)) {
-                                    logger(INFO, "OK, we found a password for AP: %s : %s", sta_cur->ap->essid, passwords[i]);
-                                    sta_cur->ap->password = passwords[i];
-                                    sta_cur->wpa.state = EAPOL_STATE_COMPLETE;
-                                    break;
-                                } 
-                            }
+                for(int i=0; i < PW_MAX_COUNT; i++) {
+                    if(passwords[i] && (strlen(passwords[i]) >= 8)) {
+                        if(check_wpa_password(passwords[i], sta_cur)) {
+                            logger(INFO, "OK, we found a password for AP: %s : %s", sta_cur->ap->essid, passwords[i]);
+                            sta_cur->ap->password = passwords[i];
+                            sta_cur->wpa.state = EAPOL_STATE_COMPLETE;
+                            break;
                         }
-
-                       break;
-                    case BRUTE_EXIT:
-                        return NULL;
-                        break;
+                    }
                 }
+
+                break;
+            case BRUTE_EXIT:
+                return NULL;
+                break;
+            }
 
         } else {
             logger(WARN, "Some problem with queue");
@@ -1075,7 +1095,8 @@ void *bruteforce_thread(void *arg) {
 
 /* parse a string, for example "1,2,3-7,11" */
 
-int parse_channels(const char *optarg, u_int *channels) {
+int parse_channels(const char *optarg, u_int *channels)
+{
     unsigned int i=0,chan_cur=0,chan_first=0,chan_last=0,chan_max=128,chan_remain=0;
     char *optchan = NULL, *optc;
     char *token = NULL;
@@ -1095,83 +1116,62 @@ int parse_channels(const char *optarg, u_int *channels) {
     tmp_channels = (int*) malloc(sizeof(int)*(chan_max+1));
 
     //split string in tokens, separated by ','
-    while( (token = strsep(&optchan,",")) != NULL)
-    {
+    while( (token = strsep(&optchan,",")) != NULL) {
         //range defined?
-        if(strchr(token, '-') != NULL)
-        {
+        if(strchr(token, '-') != NULL) {
             //only 1 '-' ?
-            if(strchr(token, '-') == strrchr(token, '-'))
-            {
+            if(strchr(token, '-') == strrchr(token, '-')) {
                 //are there any illegal characters?
-                for(i=0; i<strlen(token); i++)
-                {
-                    if( (token[i] < '0') && (token[i] > '9') && (token[i] != '-'))
-                    {
+                for(i=0; i<strlen(token); i++) {
+                    if( (token[i] < '0') && (token[i] > '9') && (token[i] != '-')) {
                         free(tmp_channels);
                         free(optc);
                         return 0;
                     }
                 }
 
-                if( sscanf(token, "%d-%d", &chan_first, &chan_last) != EOF )
-                {
-                    if(chan_first > chan_last)
-                    {
+                if( sscanf(token, "%d-%d", &chan_first, &chan_last) != EOF ) {
+                    if(chan_first > chan_last) {
                         free(tmp_channels);
                         free(optc);
                         return 0;
                     }
-                    for(i=chan_first; i<=chan_last; i++)
-                    {
+                    for(i=chan_first; i<=chan_last; i++) {
                         //if( (! invalid_channel(i)) && (chan_remain > 0) )
-                        if( chan_remain > 0)
-                        {
-                                tmp_channels[chan_max-chan_remain]=i;
-                                chan_remain--;
+                        if( chan_remain > 0) {
+                            tmp_channels[chan_max-chan_remain]=i;
+                            chan_remain--;
                         }
                     }
-                }
-                else
-                {
+                } else {
                     free(tmp_channels);
                     free(optc);
                     return 0;
                 }
 
-            }
-            else
-            {
+            } else {
                 free(tmp_channels);
                 free(optc);
                 return 0;
             }
-        }
-        else
-        {
+        } else {
             //are there any illegal characters?
-            for(i=0; i<strlen(token); i++)
-            {
-                if( (token[i] < '0') && (token[i] > '9') )
-                {
+            for(i=0; i<strlen(token); i++) {
+                if( (token[i] < '0') && (token[i] > '9') ) {
                     free(tmp_channels);
                     free(optc);
                     return 0;
                 }
             }
 
-            if( sscanf(token, "%d", &chan_cur) != EOF)
-            {
+            if( sscanf(token, "%d", &chan_cur) != EOF) {
                 //if( (! invalid_channel(chan_cur)) && (chan_remain > 0) )
-                if(chan_remain > 0)
-                {
-                        tmp_channels[chan_max-chan_remain]=chan_cur;
-                        chan_remain--;
+                if(chan_remain > 0) {
+                    tmp_channels[chan_max-chan_remain]=chan_cur;
+                    chan_remain--;
                 }
 
-            }
-            else
-            {
+            } else {
                 free(tmp_channels);
                 free(optc);
                 return 0;
@@ -1181,8 +1181,7 @@ int parse_channels(const char *optarg, u_int *channels) {
 
     //G.own_channels = (int*) malloc(sizeof(int)*(chan_max - chan_remain + 1));
 
-    for(i=0; i<(chan_max - chan_remain); i++)
-    {
+    for(i=0; i<(chan_max - chan_remain); i++) {
         channels[i] = tmp_channels[i];
     }
 
@@ -1194,7 +1193,8 @@ int parse_channels(const char *optarg, u_int *channels) {
 }
 
 
-int main(int argc, char *argv[]) {
+int main(int argc, char *argv[])
+{
 
     int option, option_index;
     pthread_t loop_tid;
@@ -1241,8 +1241,8 @@ int main(int argc, char *argv[]) {
         {"mtu", 1, 0, 'u'},
         {"help", 0, 0, 'h'},
         {"debug", 0, 0, 'd'},
-        {0, 0, 0,  0 }  
-    };   
+        {0, 0, 0,  0 }
+    };
 
     // This handles all of the command line arguments
 
@@ -1331,7 +1331,7 @@ int main(int argc, char *argv[]) {
         ctx->channels[ci] = 0;
     }
 
-      
+
     if(ctx->mtu <= 0 || ctx->mtu > 1500) {
         (void) fprintf(stderr, "MTU must be > 0 and < 1500\n");
         return -1;
@@ -1356,7 +1356,7 @@ int main(int argc, char *argv[]) {
         return -1;
     }
 
-    
+
     // Open interfaces and prepare them for monitor/inject
     if(!(ctx->wi_mon = wi_open(ctx->if_mon_name))) {
         logger(FATAL, "Fail to initialize monitor interface: %s", ctx->if_mon_name);
@@ -1364,7 +1364,7 @@ int main(int argc, char *argv[]) {
     }
     wi_get_mac(ctx->wi_mon, ctx->if_mon_mac);
     logger(INFO, "Initialized %s interface for monitor. HW: %02x:%02x:%02x:%02x:%02x:%02x", wi_get_ifname(ctx->wi_mon), ctx->if_mon_mac[0], ctx->if_mon_mac[1], ctx->if_mon_mac[2], ctx->if_mon_mac[3], ctx->if_mon_mac[4], ctx->if_mon_mac[5]);
- 
+
     if(!strcmp(ctx->if_inj_name, ctx->if_mon_name)) {
         logger(INFO, "Monitor and inject interfaces are the same, so inject == monitor");
         ctx->wi_inj = ctx->wi_mon;
@@ -1385,7 +1385,7 @@ int main(int argc, char *argv[]) {
     if(ctx->hop_time < 100) {
         logger(FATAL, "Hop timeout must be > 100, because card can`t hop so fast (remember, it is defined in milliseconds)");
         return -1;
-    } 
+    }
 
     if (!ctx->channels[0]) {
         logger(INFO, "Channels or band is not specified. Using default(BG band)");
@@ -1395,7 +1395,7 @@ int main(int argc, char *argv[]) {
         ctx->channels[i] = 0;
     }
 
-    if((view_chans = malloc(MAX_CHANS_LEN*2))){
+    if((view_chans = malloc(MAX_CHANS_LEN*2))) {
         bzero(view_chans, MAX_CHANS_LEN*2);
         for (i = 0; i <= sizeof(ctx->channels); i++) {
             if(!ctx->channels[i]) break;
@@ -1404,7 +1404,7 @@ int main(int argc, char *argv[]) {
 
         logger(INFO, "Using channels: %s", view_chans);
     }
-    
+
 
     if(thread_queue_init(&bqueue) != 0) {
         logger(FATAL, "Cannot initialize queue");
@@ -1415,7 +1415,7 @@ int main(int argc, char *argv[]) {
     if ((pthread_mutex_init (&(ctx->mutex), NULL)) != 0) {
         logger(FATAL, "pthread mutex initialization failed");
         return -1;
-    }   
+    }
 
     if(ctx->pw_fn) {
         logger(INFO, "Starting WPA/WPA2/WEP bruteforce and injecting thread. Dictionary: %s", ctx->pw_fn);

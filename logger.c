@@ -15,7 +15,8 @@ static FILE *logfd;
 
 extern int debugged;
 
-int logger_init(const char *filename) {
+int logger_init(const char *filename)
+{
     FILE *fd;
 
     if(filename) {
@@ -30,7 +31,8 @@ int logger_init(const char *filename) {
     return(0);
 }
 
-void logger(int type, const char *fmt, ...) {
+void logger(int type, const char *fmt, ...)
+{
 
     va_list ap;
     char tfmt[64], tbuf[64];

@@ -1,9 +1,9 @@
 #ifndef _THREADQUEUE_H_
-#define _THREADQUEUE_H_ 
+#define _THREADQUEUE_H_
 
 #include <pthread.h>
 
-struct threadmsg{
+struct threadmsg {
     void *data;
     long msgtype;
     long qlength;

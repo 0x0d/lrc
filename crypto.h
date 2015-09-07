@@ -61,7 +61,7 @@
 #define ROR32( A, n ) ROL32( (A), 32-(n) )
 
 #define EAPOL_PAIRWISE                0x08
-#define EAPOL_INSTALL                 0x40    
+#define EAPOL_INSTALL                 0x40
 #define EAPOL_ACK                     0x80
 #define EAPOL_MIC                     0x01
 
@@ -70,32 +70,32 @@
 #define ZERO "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
 
 struct WPA_ST_info {
-	struct WPA_ST_info *next;	/* next supplicant              */
-	uchar stmac[6];		/* supplicant MAC               */
-	uchar bssid[6];		/* authenticator MAC            */
-	uchar snonce[32];	/* supplicant nonce             */
-	uchar anonce[32];	/* authenticator nonce          */
-	uchar keymic[20];	/* eapol frame MIC              */
-	uchar eapol[256];	/* eapol frame contents         */
-	uchar ptk[80];		/* pairwise transcient key      */
-	int eapol_size;		/* eapol frame size             */
-	unsigned long t_crc;	/* last ToDS   frame CRC        */
-	unsigned long f_crc;	/* last FromDS frame CRC        */
-	int keyver, valid_ptk;
+    struct WPA_ST_info *next;	/* next supplicant              */
+    uchar stmac[6];		/* supplicant MAC               */
+    uchar bssid[6];		/* authenticator MAC            */
+    uchar snonce[32];	/* supplicant nonce             */
+    uchar anonce[32];	/* authenticator nonce          */
+    uchar keymic[20];	/* eapol frame MIC              */
+    uchar eapol[256];	/* eapol frame contents         */
+    uchar ptk[80];		/* pairwise transcient key      */
+    int eapol_size;		/* eapol frame size             */
+    unsigned long t_crc;	/* last ToDS   frame CRC        */
+    unsigned long f_crc;	/* last FromDS frame CRC        */
+    int keyver, valid_ptk;
 };
 
 struct Michael {
-	unsigned long key0;
-	unsigned long key1;
-	unsigned long left;
-	unsigned long right;
-	unsigned long nBytesInM;
-	unsigned long message;
-	unsigned char mic[8];
+    unsigned long key0;
+    unsigned long key1;
+    unsigned long left;
+    unsigned long right;
+    unsigned long nBytesInM;
+    unsigned long message;
+    unsigned char mic[8];
 };
 
 struct rc4_state {
-	int x, y, m[256];
+    int x, y, m[256];
 };
 
 void calc_pmk(char *key, char *essid, unsigned char pmk[40]);
@@ -106,7 +106,7 @@ unsigned long calc_crc_plain(unsigned char *buf, int len);
 int add_crc32(unsigned char *data, int length);
 int add_crc32_plain(unsigned char *data, int length);
 int calc_tkip_ppk(unsigned char *h80211, int caplen, unsigned char TK1[16],
-		  unsigned char key[16]);
+                  unsigned char key[16]);
 int calc_tkip_mic(uchar * packet, int length, uchar ptk[80], uchar value[8]);
 int michael_test(uchar key[8], uchar * message, int length, uchar out[8]);
 int calc_tkip_mic_key(uchar * packet, int length, uchar key[8]);

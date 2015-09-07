@@ -10,7 +10,8 @@
 #include "logger.h"
 #include "matchers.h"
 
-struct matcher_entry *matchers_match(const char *data, int datalen, struct ctx *ctx, u_int proto, u_int src_port, u_int dst_port) {
+struct matcher_entry *matchers_match(const char *data, int datalen, struct ctx *ctx, u_int proto, u_int src_port, u_int dst_port)
+{
     struct matcher_entry *matcher;
     int ovector[30];
 
@@ -34,23 +35,24 @@ struct matcher_entry *matchers_match(const char *data, int datalen, struct ctx *
     return NULL;
 }
 
-struct matcher_entry *matchers_get_response(u_char *data, u_int datalen, struct ctx *ctx, u_int type, u_int src_port, u_int dst_port) {
+struct matcher_entry *matchers_get_response(u_char *data, u_int datalen, struct ctx *ctx, u_int type, u_int src_port, u_int dst_port)
+{
 
     struct matcher_entry *matcher;
 
-    #ifdef HAVE_PYTHON
+#ifdef HAVE_PYTHON
     PyObject *args;
     PyObject *value;
     Py_ssize_t rdatalen;
     char *rdata;
-    #endif
+#endif
 
     if(!(matcher = matchers_match((const char *)data, datalen, ctx, type, src_port, dst_port))) {
         logger(DBG, "No matchers found for data");
         return NULL;
     }
 
-    #ifdef HAVE_PYTHON
+#ifdef HAVE_PYTHON
     if(matcher->pyfunc) {
         logger(DBG, "We have a Python code to construct response");
         args = PyTuple_New(2);
@@ -82,8 +84,8 @@ struct matcher_entry *matchers_get_response(u_char *data, u_int datalen, struct 
         }
         return matcher;
     }
-    #endif
-    
+#endif
+
     if(matcher->response) {
         logger(DBG, "We have a plain text response");
         return matcher;
@@ -95,7 +97,8 @@ struct matcher_entry *matchers_get_response(u_char *data, u_int datalen, struct 
 }
 
 
-struct matcher_entry *check_block_params(struct matcher_entry *head) {
+struct matcher_entry *check_block_params(struct matcher_entry *head)
+{
 
     if(head->name == NULL) {
         printf("You must specify block name\n");
@@ -107,11 +110,11 @@ struct matcher_entry *check_block_params(struct matcher_entry *head) {
         return NULL;
     }
 
-    #ifdef HAVE_PYTHON
+#ifdef HAVE_PYTHON
     if((head->response == NULL || head->response_len < 1 || head->response_len > MATCHER_MAX_RESPONSE) && head->pyfunc == NULL) {
-    #else
+#else
     if((head->response == NULL || head->response_len < 1 || head->response_len > MATCHER_MAX_RESPONSE)) {
-    #endif
+#endif
         printf("Error: block \"%s\" has missing or malformed response/pymodule!\n", head->name);
         return NULL;
     }
@@ -132,7 +135,8 @@ struct matcher_entry *check_block_params(struct matcher_entry *head) {
     return head;
 }
 
-struct matcher_entry *parse_matchers_file(char *matcher_file_path) {
+struct matcher_entry *parse_matchers_file(char *matcher_file_path)
+{
 
     FILE *matcher_file;
     char matcher_line[MATCHER_MAX_LEN];
@@ -152,9 +156,9 @@ struct matcher_entry *parse_matchers_file(char *matcher_file_path) {
         const char *errptr;
         unsigned int arglen, lenread=0;
         int c, fd;
-        #ifdef HAVE_PYTHON
+#ifdef HAVE_PYTHON
         int pyinitialized=0;
-        #endif
+#endif
         struct stat statbuf;
 
         line_no++;
@@ -274,7 +278,7 @@ struct matcher_entry *parse_matchers_file(char *matcher_file_path) {
 
                 head->response_len = lenread;
 
-            #ifdef HAVE_PYTHON
+#ifdef HAVE_PYTHON
             } else if(strcmp(command, "pymodule") == 0) {
                 if(!pyinitialized) {
                     setenv("PYTHONPATH", PYTHONPATH, 1);
@@ -294,11 +298,11 @@ struct matcher_entry *parse_matchers_file(char *matcher_file_path) {
                     printf("No function named '"PYFUNCNAME"' in module: %s\n", argument);
                     return NULL;
                 }
-            #endif
+#endif
             } else if(strcmp(command, "end") == 0) {
                 // now's a good time to make sure the block had everything we care about..
                 if(head && !(head = check_block_params(head))) {
-                    return NULL; 
+                    return NULL;
                 }
             } else {
                 printf("Unknown command at line %u\n", line_no);

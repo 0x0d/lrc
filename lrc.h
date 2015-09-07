@@ -19,7 +19,7 @@
 
 #define LLC_SIZE 8
 #define PW_MAX_SIZE 256
-#define PW_MAX_COUNT 65535 
+#define PW_MAX_COUNT 65535
 #define MAX_CHANS_LEN 256
 
 // context for holding program state
@@ -40,7 +40,7 @@ struct ctx {
     libnet_ptag_t lnet_p_udp;
     libnet_ptag_t lnet_p_ip;
 
-    u_int mtu; 
+    u_int mtu;
 
     pthread_mutex_t mutex;
 

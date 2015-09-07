@@ -17,7 +17,7 @@ struct ap_info {
     struct ap_info *next;
 };
 
-struct wpa_info{
+struct wpa_info {
     u_char stmac[6];
     u_char snonce[32];
     u_char anonce[32];

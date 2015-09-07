@@ -13,7 +13,8 @@ struct msglist {
     struct msglist *next;
 };
 
-static inline struct msglist *get_msglist(struct threadqueue *queue) {
+static inline struct msglist *get_msglist(struct threadqueue *queue)
+{
     struct msglist *tmp;
 
     if(queue->msgpool != NULL) {
@@ -27,7 +28,8 @@ static inline struct msglist *get_msglist(struct threadqueue *queue) {
     return tmp;
 }
 
-static inline void release_msglist(struct threadqueue *queue,struct msglist *node) {
+static inline void release_msglist(struct threadqueue *queue,struct msglist *node)
+{
 
     if(queue->msgpool_length > ( queue->length/8 + MSGPOOL_SIZE)) {
         free(node);
@@ -46,7 +48,8 @@ static inline void release_msglist(struct threadqueue *queue,struct msglist *nod
     }
 }
 
-int thread_queue_init(struct threadqueue *queue) {
+int thread_queue_init(struct threadqueue *queue)
+{
     int ret = 0;
     if (queue == NULL) {
         return EINVAL;
@@ -67,7 +70,8 @@ int thread_queue_init(struct threadqueue *queue) {
 
 }
 
-int thread_queue_add(struct threadqueue *queue, void *data, long msgtype) {
+int thread_queue_add(struct threadqueue *queue, void *data, long msgtype)
+{
     struct msglist *newmsg;
     pthread_mutex_lock(&queue->mutex);
     newmsg = get_msglist(queue);
@@ -87,8 +91,8 @@ int thread_queue_add(struct threadqueue *queue, void *data, long msgtype) {
         queue->last = newmsg;
     }
 
-        if(queue->length == 0)
-                pthread_cond_broadcast(&queue->cond);
+    if(queue->length == 0)
+        pthread_cond_broadcast(&queue->cond);
     queue->length++;
     pthread_mutex_unlock(&queue->mutex);
 
@@ -96,7 +100,8 @@ int thread_queue_add(struct threadqueue *queue, void *data, long msgtype) {
 
 }
 
-int thread_queue_get(struct threadqueue *queue, const struct timespec *timeout, struct threadmsg *msg) {
+int thread_queue_get(struct threadqueue *queue, const struct timespec *timeout, struct threadmsg *msg)
+{
     struct msglist *firstrec;
     int ret = 0;
     struct timespec abstimeout;
@@ -145,7 +150,7 @@ int thread_queue_get(struct threadqueue *queue, const struct timespec *timeout, 
 
     msg->data = firstrec->msg.data;
     msg->msgtype = firstrec->msg.msgtype;
-        msg->qlength = queue->length;
+    msg->qlength = queue->length;
 
     release_msglist(queue,firstrec);
     pthread_mutex_unlock(&queue->mutex);
@@ -153,7 +158,8 @@ int thread_queue_get(struct threadqueue *queue, const struct timespec *timeout, 
     return 0;
 }
 
-int thread_queue_cleanup(struct threadqueue *queue, int freedata) {
+int thread_queue_cleanup(struct threadqueue *queue, int freedata)
+{
     struct msglist *rec;
     struct msglist *next;
     struct msglist *recs[2];
@@ -185,7 +191,8 @@ int thread_queue_cleanup(struct threadqueue *queue, int freedata) {
 
 }
 
-long thread_queue_length(struct threadqueue *queue) {
+long thread_queue_length(struct threadqueue *queue)
+{
     long counter;
     // get the length properly
     pthread_mutex_lock(&queue->mutex);

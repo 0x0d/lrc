@@ -3,7 +3,7 @@
 
 #include <pcre.h>
 
-#define MATCHER_MAX_LEN 2048 
+#define MATCHER_MAX_LEN 2048
 #define MATCHER_MAX_RESPONSE 32000 // maximum text response len 
 #define MATCHERS_DEFAULT_FILENAME "matchers.conf"
 
@@ -21,15 +21,15 @@ struct matcher_entry {
     pcre *ignore;
     u_char *response;
     u_int response_len;
-    #ifdef HAVE_PYTHON
+#ifdef HAVE_PYTHON
     PyObject *pyfunc;
-    #endif
+#endif
     u_int options;
-    #define MATCHER_OPTION_RESET 1
+#define MATCHER_OPTION_RESET 1
     u_int proto;
-    #define MATCHER_PROTO_ANY 1
-    #define MATCHER_PROTO_UDP 2
-    #define MATCHER_PROTO_TCP 3
+#define MATCHER_PROTO_ANY 1
+#define MATCHER_PROTO_UDP 2
+#define MATCHER_PROTO_TCP 3
     u_int src_port;
     u_int dst_port;
     struct matcher_entry *next;
