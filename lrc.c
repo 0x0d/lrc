@@ -816,15 +816,19 @@ void dot11_data_process(struct ctx *ctx, struct rx_info *rxi, struct ieee80211_f
                 p += LLC_SIZE;
                 len -= LLC_SIZE;
 
+
                 if(len > 0 && (ctx->pw_fn != NULL) && (sta_cur->wpa.state != EAPOL_STATE_PROCESSING)) {
                     eapol_wpa_process(p, len, sta_cur);
 
                     if (sta_cur->wpa.state == EAPOL_STATE_COMPLETE) {
                         logger(INFO, "WPA handshake collected for STA [%02X:%02X:%02X:%02X:%02X:%02X] to AP %s", sta_cur->sta_mac[0], sta_cur->sta_mac[1], sta_cur->sta_mac[2], sta_cur->sta_mac[3], sta_cur->sta_mac[4], sta_cur->sta_mac[5], ap_cur->essid);
+                        bzero(sta_cur->wpa.ptk, sizeof(sta_cur->wpa.ptk));
                         memcpy (sta_cur->wpa.stmac, sta_cur->sta_mac, 6);
-                        if(sta_cur->ap->password == NULL) {
+                        if(sta_cur->ap->password == NULL && sta_cur->ap->crypt_type == CRYPT_TYPE_WPA) {
                             thread_queue_add(ctx->brute_queue, sta_cur, BRUTE_STA);
                             sta_cur->wpa.state = EAPOL_STATE_PROCESSING;
+                        } else {
+                            logger(INFO, "No need to brute that handshake");
                         }
                         return;
                     }
@@ -865,17 +869,19 @@ void dot11_data_process(struct ctx *ctx, struct rx_info *rxi, struct ieee80211_f
             return;
         }
 
-        if((sta_cur->wpa.state == EAPOL_STATE_COMPLETE) && (sta_cur->ap->password != NULL)) {
+        if((sta_cur->ap->password != NULL)) {
             nwh = malloc(nlen*2);
             memcpy(nwh, wh, nlen);
             if(decrypt_wpa((u_char *)nwh, nlen, sta_cur, sta_cur->ap->password, sta_cur->ap->essid, sta_cur->ap->bssid)) {
-                //logger(INFO, "Packet was decrypted");
-                //hexdump(nwh, nlen);
+                logger(INFO, "Packet was decrypted");
                 //dot11_data_process(ctx, nwh, nlen, 1);
             } else {
                 logger(WARN, "FAIL to decrypt packet");
             }
             free(nwh);
+            if(sta_cur->wpa.state != EAPOL_STATE_CAN_RENEW) {
+                sta_cur->wpa.state = EAPOL_STATE_CAN_RENEW;
+            }
             return;
         }
     }
@@ -1064,7 +1070,7 @@ void *bruteforce_thread(void *arg)
         pw_iter++;
     } while((c != EOF) && (pw_iter != PW_MAX_COUNT));
     fclose(fp);
-    free(buffer);
+    //free(buffer); // crash on openwrt
 
     while(1) {
         if(dead) {
@@ -1083,7 +1089,7 @@ void *bruteforce_thread(void *arg)
                         if(check_wpa_password(passwords[i], sta_cur)) {
                             logger(INFO, "OK, we found a password for AP: %s : %s", sta_cur->ap->essid, passwords[i]);
                             sta_cur->ap->password = passwords[i];
-                            sta_cur->wpa.state = EAPOL_STATE_COMPLETE;
+                            sta_cur->wpa.state = EAPOL_STATE_CAN_RENEW;
                             break;
                         }
                     }

@@ -1147,8 +1147,16 @@ int decrypt_wpa(u_char *h80211, int h80211_len, struct sta_info *sta_cur, char *
         z += 2;
     }
 
-    calc_pmk((char *)password, (char *)essid, pmk);
-    calc_ptk(sta_cur, pmk);
+    if(!sta_cur->ap->pmk[0]) {
+        calc_pmk((char *)password, (char *)essid, pmk);
+        memcpy(sta_cur->ap->pmk, pmk, sizeof(pmk));
+    } else {
+        memcpy(pmk, sta_cur->ap->pmk, sizeof(sta_cur->ap->pmk));
+    }
+
+    if(!sta_cur->wpa.ptk[0]) {
+        calc_ptk(sta_cur, pmk);
+    }
 
     // check the SNAP header to see if data is encrypted
     // as unencrypted data begins with AA AA 03 00 00 00

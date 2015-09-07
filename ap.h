@@ -14,6 +14,7 @@ struct ap_info {
     int crypt_type;
     int channel;
     char *password;
+    u_char pmk[40];
     struct ap_info *next;
 };
 
@@ -29,7 +30,8 @@ struct wpa_info {
 #define EAPOL_VERSION_TKIP  1
     int keyver;
 #define EAPOL_STATE_PROCESSING 10
-#define EAPOL_STATE_COMPLETE    7
+#define EAPOL_STATE_CAN_RENEW 0
+#define EAPOL_STATE_COMPLETE 7
     int state;
 };
 

@@ -3,7 +3,7 @@
 #   http://wiki.openwrt.org/doc/devel/crosscompile
  
 HAVE_PYTHON=0
-DEBUG=0
+DEBUG=1
 
 TARGET_DIR=/home/invent/alfa/15.05_buildroot/openwrt/staging_dir/target-mips_34kc_uClibc-0.9.33.2
 TOOLCHAIN_DIR=/home/invent/alfa/15.05_buildroot/openwrt/staging_dir/toolchain-mips_34kc_gcc-4.8-linaro_uClibc-0.9.33.2
@@ -12,7 +12,7 @@ TOOLCHAIN_DIR=/home/invent/alfa/15.05_buildroot/openwrt/staging_dir/toolchain-mi
 STAGING_DIR=$(TOOLCHAIN_DIR)
 
 CFLAGS=-O3 -Wall -D_DEFAULT_SOURCE -I$(TOOLCHAIN_DIR)/usr/include -I$(TARGET_DIR)/usr/include -static
-LDFLAGS=-L$(TOOLCHAIN_DIR)/usr/lib -L$(TARGET_DIR)/usr/lib -static -lpthread -lpcre -lnet -lnl-genl-3 -lnl-3 -lcrypto
+LDFLAGS=-L$(TOOLCHAIN_DIR)/usr/lib -L$(TARGET_DIR)/usr/lib -lpthread -lpcre -lnet -lnl-genl-3 -lnl-3 -lcrypto
 CC=$(TOOLCHAIN_DIR)/bin/mips-openwrt-linux-uclibc-gcc
 LD=$(TOOLCHAIN_DIR)/bin/mips-openwrt-linux-uclibc-ld
 
