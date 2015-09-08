@@ -869,7 +869,7 @@ void dot11_data_process(struct ctx *ctx, struct rx_info *rxi, struct ieee80211_f
             return;
         }
 
-        if((sta_cur->ap->password != NULL)) {
+        if((sta_cur->ap->password != NULL) && (sta_cur->wpa.state != EAPOL_STATE_PROCESSING)) {
             nwh = malloc(nlen*2);
             memcpy(nwh, wh, nlen);
             if(decrypt_wpa((u_char *)nwh, nlen, sta_cur, sta_cur->ap->password, sta_cur->ap->essid, sta_cur->ap->bssid)) {
