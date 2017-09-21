@@ -325,7 +325,7 @@ void ip_packet_process(const u_char *dot3, u_int dot3_len, struct ieee80211_fram
     u_int tcpflags;
 
     /* Calculate the size of the IP Header. ip_hdr->ihl contains the number of 32 bit
-    words that represent the header size. Therfore to get the number of bytes
+    words that represent the header size. Therefore to get the number of bytes
     multiple this number by 4 */
 
     ip_hdr = (struct iphdr *) (dot3);
@@ -333,7 +333,7 @@ void ip_packet_process(const u_char *dot3, u_int dot3_len, struct ieee80211_fram
     memcpy(&src_ip, inet_ntoa(*((struct in_addr *) &ip_hdr->saddr)), sizeof(src_ip));
     memcpy(&dst_ip, inet_ntoa(*((struct in_addr *) &ip_hdr->daddr)), sizeof(dst_ip));
 
-    logger(INFO, "IP id:%d tos:0x%x version:%d iphlen:%d dglen:%d protocol:%d ttl:%d src:%s dst:%s", ntohs(ip_hdr->id), ip_hdr->tos, ip_hdr->version, ip_hdr->ihl*4, ntohs(ip_hdr->tot_len), ip_hdr->protocol, ip_hdr->ttl, src_ip, dst_ip);
+    logger(DBG, "IP id:%d tos:0x%x version:%d iphlen:%d dglen:%d protocol:%d ttl:%d src:%s dst:%s", ntohs(ip_hdr->id), ip_hdr->tos, ip_hdr->version, ip_hdr->ihl*4, ntohs(ip_hdr->tot_len), ip_hdr->protocol, ip_hdr->ttl, src_ip, dst_ip);
 
     if(ntohs(ip_hdr->tot_len) > dot3_len) {
         logger(DBG, "Ambicious len in IP header, skipping");
@@ -348,7 +348,7 @@ void ip_packet_process(const u_char *dot3, u_int dot3_len, struct ieee80211_fram
          multiple this number by 4 */
         tcp_hdr = (struct tcphdr *) (dot3+sizeof(struct iphdr));
         tcp_datalen = ntohs(ip_hdr->tot_len) - (ip_hdr->ihl * 4) - (tcp_hdr->doff * 4);
-        logger(INFO, "TCP src_port:%d dest_port:%d doff:%d datalen:%d win:0x%x ack:%l seq:%d", ntohs(tcp_hdr->source), ntohs(tcp_hdr->dest), tcp_hdr->doff*4, tcp_datalen, ntohs(tcp_hdr->window), ntohl(tcp_hdr->ack_seq), ntohs(tcp_hdr->seq));
+        logger(DBG, "TCP src_port:%d dest_port:%d doff:%d datalen:%d win:0x%x ack:%l seq:%d", ntohs(tcp_hdr->source), ntohs(tcp_hdr->dest), tcp_hdr->doff*4, tcp_datalen, ntohs(tcp_hdr->window), ntohl(tcp_hdr->ack_seq), ntohs(tcp_hdr->seq));
         logger(DBG, "TCP FLAGS %c%c%c%c%c%c",
                (tcp_hdr->urg ? 'U' : '*'),
                (tcp_hdr->ack ? 'A' : '*'),
@@ -413,7 +413,7 @@ void ip_packet_process(const u_char *dot3, u_int dot3_len, struct ieee80211_fram
     case IPPROTO_UDP:
         udp_hdr = (struct udphdr *) (dot3+sizeof(struct iphdr));
         udp_datalen = ntohs(udp_hdr->len) - sizeof(struct udphdr);
-        logger(INFO, "UDP src_port:%d dst_port:%d len:%d", ntohs(udp_hdr->source), ntohs(udp_hdr->dest), udp_datalen);
+        logger(DBG, "UDP src_port:%d dst_port:%d len:%d", ntohs(udp_hdr->source), ntohs(udp_hdr->dest), udp_datalen);
 
         // make sure the packet isn't empty..
         if(udp_datalen <= 0) {
@@ -577,7 +577,7 @@ void dot11_beacon_process(struct ctx *ctx, struct rx_info *rxi, struct ieee80211
     }
 
     // skip fixed parameters(12 bytes)
-    wb += fix_len; 
+    wb += fix_len;
     len -= fix_len;
 
 
@@ -795,7 +795,7 @@ void dot11_data_process(struct ctx *ctx, struct rx_info *rxi, struct ieee80211_f
     }
 
     if(!(ap_cur = ap_lookup(ctx, bssid))) {
-        logger(INFO, "Cannot found AP [%02X:%02X:%02X:%02X:%02X:%02X] in cache, skipping", bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5]);
+        logger(DBG, "Cannot found AP [%02X:%02X:%02X:%02X:%02X:%02X] in cache, skipping", bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5]);
         return;
     }
 
@@ -1111,15 +1111,15 @@ void *bruteforce_thread(void *arg)
 
 int invalid_channel(int chan)
 {
-    int i=0; 
+    int i=0;
 
-    do {    
+    do {
         if (chan == bg_chans[i] && chan != 0 ) {
             return 0;
         }
     } while (bg_chans[++i]);
 
-    do {    
+    do {
         if (chan == a_chans[i] && chan != 0 ) {
             return 0;
         }
@@ -1129,7 +1129,7 @@ int invalid_channel(int chan)
 }
 
 
-// parse a string, for example "1,2,3-7,11" 
+// parse a string, for example "1,2,3-7,11"
 int parse_channels(const char *optarg, u_int *channels)
 {
     int i=0,chan_cur=0,chan_first=0,chan_last=0,chan_max=128,chan_remain=0;

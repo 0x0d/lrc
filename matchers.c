@@ -124,11 +124,11 @@ struct matcher_entry *check_block_params(struct matcher_entry *head)
         return NULL;
     }
 
-    if(head->dst_port >= 65535) {
+    if(head->dst_port >= 65535 || head->dst_port < 0) {
         printf("Error: block \"%s\" has incorrect dst port\n", head->name);
         return NULL;
     }
-    if(head->src_port >= 65535) {
+    if(head->src_port >= 65535 || head->src_port < 0) {
         printf("Error: block \"%s\" has incorrect src port\n", head->name);
         return NULL;
     }
@@ -242,9 +242,17 @@ struct matcher_entry *parse_matchers_file(char *matcher_file_path)
                     return NULL;
                 }
             } else if(strcmp(command, "dst_port") == 0) {
-                head->dst_port = atoi(argument);
+                if(strcmp(argument, "any") == 0) {
+                    head->dst_port = 0;
+                } else {
+                    head->dst_port = atoi(argument);
+                }
             } else if(strcmp(command, "src_port") == 0) {
-                head->src_port = atoi(argument);
+                if(strcmp(argument, "any") == 0) {
+                    head->src_port = 0;
+                } else {
+                    head->src_port = atoi(argument);
+                }
             } else if(strcmp(command, "response") == 0) {
                 // path to the file to load the response from
                 if((fd = open(argument, O_RDONLY)) < 0) {
